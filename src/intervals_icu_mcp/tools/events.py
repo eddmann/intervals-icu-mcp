@@ -10,6 +10,51 @@ from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
 
 
+def _normalize_date_str(date_str: str) -> str:
+    """Normalize various ISO date/datetime inputs to YYYY-MM-DD."""
+    if not date_str:
+        return date_str
+
+    # Accept datetime/date objects as well
+    if isinstance(date_str, datetime):
+        return date_str.date().isoformat()
+
+    # Normalize whitespace and ensure string
+    s = str(date_str).strip()
+
+    # Fast-path for already date-only strings
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s
+
+    # Try ISO parsing with various fallbacks to be robust against formats
+    try:
+        # datetime.fromisoformat doesn't accept trailing 'Z', replace with +00:00
+        if s.endswith("Z"):
+            s2 = s[:-1] + "+00:00"
+        else:
+            s2 = s
+        dt = datetime.fromisoformat(s2)
+        return dt.date().isoformat()
+    except Exception:
+        # Handle common variations via strptime patterns
+        fmts = [
+            "%Y-%m-%d",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M%z",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M",
+        ]
+        for fmt in fmts:
+            try:
+                dt = datetime.strptime(s if "%z" not in fmt else (s.replace("Z", "+0000") if s.endswith("Z") else s), fmt)
+                return dt.date().isoformat()
+            except Exception:
+                continue
+
+    # If parsing fails, return original string (best-effort)
+    return s
+
+
 async def get_calendar_events(
     days_ahead: Annotated[int, "Number of days to look ahead"] = 7,
     days_back: Annotated[int, "Number of days to look back"] = 0,
@@ -56,18 +101,24 @@ async def get_calendar_events(
                     },
                 )
 
-            # Sort by date
-            events.sort(key=lambda x: x.start_date_local)
+            # Normalize start dates and sort by date
+            events.sort(key=lambda x: _normalize_date_str(x.start_date_local))
 
             # Group events by date
             events_by_date: dict[str, list[dict[str, Any]]] = {}
             for event in events:
-                date = event.start_date_local
+                date = _normalize_date_str(event.start_date_local)
                 if date not in events_by_date:
                     events_by_date[date] = []
 
                 # Determine relative timing
-                date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+                try:
+                    date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+                except Exception:
+                    # Fall back to parsing any ISO datetime-like string
+                    if date.endswith("Z"):
+                        date = date[:-1] + "+00:00"
+                    date_obj = datetime.fromisoformat(date).date()
                 today = datetime.now().date()
 
                 if date_obj == today:
@@ -183,13 +234,14 @@ async def get_upcoming_workouts(
                     metadata={"message": "No workouts planned on your calendar"},
                 )
 
-            # Sort by date and limit
-            workouts.sort(key=lambda x: x.start_date_local)
+            # Sort by normalized date and limit
+            workouts.sort(key=lambda x: _normalize_date_str(x.start_date_local))
             workouts = workouts[:limit]
 
             workouts_data: list[dict[str, Any]] = []
             for workout in workouts:
-                date_obj = datetime.strptime(workout.start_date_local, "%Y-%m-%d").date()
+                date_str = _normalize_date_str(workout.start_date_local)
+                date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
                 today = datetime.now().date()
 
                 if date_obj == today:
@@ -201,7 +253,7 @@ async def get_upcoming_workouts(
                     relative_timing = f"in_{days_until}_days"
 
                 workout_item: dict[str, Any] = {
-                    "date": workout.start_date_local,
+                    "date": date_str,
                     "relative_timing": relative_timing,
                     "name": workout.name or "Workout",
                 }
@@ -272,9 +324,12 @@ async def get_event(
         async with ICUClient(config) as client:
             event = await client.get_event(event_id)
 
+            # Normalize date to YYYY-MM-DD so output matches calendar/upcoming_workouts
+            event_date = _normalize_date_str(event.start_date_local)
+
             event_data: dict[str, Any] = {
                 "id": event.id,
-                "date": event.start_date_local,
+                "date": event_date,
                 "name": event.name or event.category or "Event",
                 "category": event.category,
             }
