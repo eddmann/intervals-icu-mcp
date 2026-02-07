@@ -46,9 +46,21 @@ make format
 ### Running Locally
 
 ```bash
-# Run the MCP server
+# Run the MCP server in stdio mode (default)
 make run
+
+# Run the MCP server via HTTP with uvicorn (development mode with auto-reload)
+make run/http
+
+# Run the MCP server via HTTP in production mode (4 workers)
+make run/http/prod
 ```
+
+The HTTP server will be available at:
+- MCP endpoint: `http://localhost:8000/mcp`
+- Health check: `http://localhost:8000/health`
+
+For production deployments with multiple workers, ensure `FASTMCP_STATELESS_HTTP=true` is set in your environment to enable stateless mode.
 
 ### Docker
 
@@ -60,16 +72,78 @@ make docker/build
 make docker/run
 ```
 
+## HTTP Deployment
+
+The MCP server can be deployed via HTTP using uvicorn, enabling remote access and integration with web services.
+
+### Installation
+
+HTTP deployment requires the optional `http` dependency group:
+
+```bash
+# Install with HTTP support
+uv sync --extra http
+
+# Or install just the http extras
+uv pip install -e ".[http]"
+```
+
+### Development Mode
+
+```bash
+# Run with auto-reload for development
+make run/http
+
+# Or manually with uvicorn
+uv run --extra http uvicorn intervals_icu_mcp.http_server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Production Mode
+
+For production deployments, use multiple workers for better performance:
+
+```bash
+# Run with 4 workers
+make run/http/prod
+
+# Or manually with stateless mode enabled
+FASTMCP_STATELESS_HTTP=true uv run --extra http uvicorn intervals_icu_mcp.http_server:app \
+  --host 0.0.0.0 --port 8000 --workers 4
+```
+
+**Important:** When using multiple workers (`--workers > 1`), you MUST enable stateless mode by setting `FASTMCP_STATELESS_HTTP=true` to prevent session-related failures.
+
+### Endpoints
+
+- **MCP Endpoint:** `http://localhost:8000/mcp` - Main MCP protocol endpoint
+- **Health Check:** `http://localhost:8000/health` - Returns service health status
+
+### ASGI Application
+
+The ASGI app is exported from `intervals_icu_mcp.http_server:app` and can be integrated with any ASGI-compatible server or platform (Uvicorn, Hypercorn, cloud platforms, etc.).
+
 ## Architecture
 
 ### Core Components
 
-**FastMCP Server** (`server.py`)
+**FastMCP Server** (`mcp.py`)
 
-- Entry point that initializes the FastMCP server
+- Initializes the FastMCP server instance
 - Registers all tools, resources, and prompts
-- Tools are imported from `tools/` modules but registered in server.py
+- Tools are imported from `tools/` modules but registered in mcp.py
 - Middleware is added before tools are registered
+
+**Server Entry Point** (`server.py`)
+
+- Main entry point that imports and runs the MCP server
+- Keeps the entry point separate from initialization logic
+
+**HTTP Server** (`http_server.py`)
+
+- ASGI application for HTTP deployment with uvicorn
+- Exports the `app` instance for ASGI servers
+- Includes health check endpoint at `/health`
+- Optional dependency - requires `uvicorn` to be installed
 
 **Middleware** (`middleware.py`)
 

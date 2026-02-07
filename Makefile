@@ -61,8 +61,14 @@ format: ## Fix style violations and format code
 auth: ## Run the Intervals.icu authentication setup
 	uv run intervals-icu-mcp-auth
 
-run: ## Run the MCP server locally
+run: ## Run the MCP server locally (stdio mode)
 	uv run intervals-icu-mcp
+
+run/http: ## Run the MCP server via HTTP with uvicorn (requires: uv sync --extra http)
+	uv run --extra http uvicorn intervals_icu_mcp.http_server:app --host 0.0.0.0 --port 8000 --reload
+
+run/http/prod: ## Run the MCP server via HTTP in production mode (4 workers)
+	uv run --extra http uvicorn intervals_icu_mcp.http_server:app --host 0.0.0.0 --port 8000 --workers 4
 
 shell: ## Open a Python shell with the project context
 	uv run python

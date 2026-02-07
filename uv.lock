@@ -446,6 +446,11 @@ dependencies = [
     { name = "python-dotenv" },
 ]
 
+[package.optional-dependencies]
+http = [
+    { name = "uvicorn" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "pyright" },
@@ -462,7 +467,9 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.12.0" },
     { name = "pydantic-settings", specifier = ">=2.11.0" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "uvicorn", marker = "extra == 'http'", specifier = ">=0.34.0" },
 ]
+provides-extras = ["http"]
 
 [package.metadata.requires-dev]
 dev = [
