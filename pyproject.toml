@@ -13,6 +13,11 @@ dependencies = [
     "python-dotenv>=1.1.1",
 ]
 
+[project.optional-dependencies]
+http = [
+    "uvicorn>=0.34.0",
+]
+
 [project.scripts]
 intervals-icu-mcp = "intervals_icu_mcp.server:main"
 intervals-icu-mcp-auth = "intervals_icu_mcp.scripts.setup_auth:main"
@@ -53,7 +58,7 @@ ignore = ["E501"]  # Line length enforced by ruff format instead
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py files
-"src/intervals_icu_mcp/server.py" = ["E402"]  # Imports must come after FastMCP initialization
+"src/intervals_icu_mcp/mcp.py" = ["E402"]  # Imports must come after FastMCP initialization
 
 [tool.pyright]
 strict = ["src"]
