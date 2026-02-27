@@ -9,11 +9,41 @@ from ..auth import ICUConfig
 from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
 
+VALID_CATEGORIES = [
+    "WORKOUT",
+    "RACE_A",
+    "RACE_B",
+    "RACE_C",
+    "NOTE",
+    "PLAN",
+    "HOLIDAY",
+    "SICK",
+    "INJURED",
+    "SET_EFTP",
+    "FITNESS_DAYS",
+    "SEASON_START",
+    "TARGET",
+    "SET_FITNESS",
+]
+
+
+def _normalize_date(date_str: str) -> str:
+    """Normalize a YYYY-MM-DD date to the datetime format expected by the API.
+
+    The Intervals.icu API expects start_date_local as a datetime string
+    (e.g., '2026-03-08T00:00:00'), not just a date.
+    """
+    return f"{date_str}T00:00:00"
+
 
 async def create_event(
     start_date: Annotated[str, "Start date in YYYY-MM-DD format"],
     name: Annotated[str, "Event name"],
-    category: Annotated[str, "Event category: WORKOUT, NOTE, RACE, or GOAL"],
+    category: Annotated[
+        str,
+        "Event category: WORKOUT, RACE_A (primary race), RACE_B (supporting race), "
+        "RACE_C (low priority race), NOTE, PLAN, HOLIDAY, SICK, INJURED, TARGET, etc.",
+    ],
     description: Annotated[str | None, "Event description (optional)"] = None,
     event_type: Annotated[str | None, "Activity type (e.g., Ride, Run, Swim)"] = None,
     duration_seconds: Annotated[int | None, "Planned duration in seconds"] = None,
@@ -26,10 +56,15 @@ async def create_event(
     Adds an event to your Intervals.icu calendar. Events can be workouts with
     planned metrics, notes for tracking information, races, or training goals.
 
+    Race categories:
+        RACE_A: Primary/target race
+        RACE_B: Supporting/buildup race
+        RACE_C: Low priority race
+
     Args:
         start_date: Date in ISO-8601 format (YYYY-MM-DD)
         name: Name of the event
-        category: Type of event - WORKOUT, NOTE, RACE, or GOAL
+        category: Type of event - WORKOUT, RACE_A, RACE_B, RACE_C, NOTE, TARGET, etc.
         description: Optional detailed description
         event_type: Activity type (e.g., "Ride", "Run", "Swim") for workouts
         duration_seconds: Planned duration for workouts
@@ -43,10 +78,9 @@ async def create_event(
     config: ICUConfig = ctx.get_state("config")
 
     # Validate category
-    valid_categories = ["WORKOUT", "NOTE", "RACE", "GOAL"]
-    if category.upper() not in valid_categories:
+    if category.upper() not in VALID_CATEGORIES:
         return ResponseBuilder.build_error_response(
-            f"Invalid category. Must be one of: {', '.join(valid_categories)}",
+            f"Invalid category. Must be one of: {', '.join(VALID_CATEGORIES)}",
             error_type="validation_error",
         )
 
@@ -62,7 +96,7 @@ async def create_event(
     try:
         # Build event data
         event_data: dict[str, Any] = {
-            "start_date_local": start_date,
+            "start_date_local": _normalize_date(start_date),
             "name": name,
             "category": category.upper(),
         }
@@ -164,7 +198,7 @@ async def update_event(
         if description is not None:
             event_data["description"] = description
         if start_date is not None:
-            event_data["start_date_local"] = start_date
+            event_data["start_date_local"] = _normalize_date(start_date)
         if event_type is not None:
             event_data["type"] = event_type
         if duration_seconds is not None:
@@ -259,7 +293,7 @@ async def delete_event(
 async def bulk_create_events(
     events: Annotated[
         str,
-        "JSON string containing array of events. Each event should have: start_date_local, name, category, and optional fields like description, type, moving_time, distance, icu_training_load",
+        "JSON string containing array of events. Each event should have: start_date_local (YYYY-MM-DD), name, category (WORKOUT, RACE_A, RACE_B, RACE_C, NOTE, TARGET, etc.), and optional fields like description, type, moving_time, distance, icu_training_load",
     ],
     ctx: Context | None = None,
 ) -> str:
@@ -297,7 +331,6 @@ async def bulk_create_events(
         events_data: list[dict[str, Any]] = parsed_data  # type: ignore[assignment]
 
         # Validate each event
-        valid_categories = ["WORKOUT", "NOTE", "RACE", "GOAL"]
         for i, event_data in enumerate(events_data):
             if "start_date_local" not in event_data:
                 return ResponseBuilder.build_error_response(
@@ -313,16 +346,16 @@ async def bulk_create_events(
                     f"Event {i}: Missing required field 'category'",
                     error_type="validation_error",
                 )
-            if event_data["category"].upper() not in valid_categories:
+            if event_data["category"].upper() not in VALID_CATEGORIES:
                 return ResponseBuilder.build_error_response(
-                    f"Event {i}: Invalid category. Must be one of: {', '.join(valid_categories)}",
+                    f"Event {i}: Invalid category. Must be one of: {', '.join(VALID_CATEGORIES)}",
                     error_type="validation_error",
                 )
 
             # Normalize category to uppercase
             event_data["category"] = event_data["category"].upper()
 
-            # Validate date format
+            # Validate and normalize date format
             try:
                 datetime.strptime(event_data["start_date_local"], "%Y-%m-%d")
             except ValueError:
@@ -330,6 +363,7 @@ async def bulk_create_events(
                     f"Event {i}: Invalid date format. Please use YYYY-MM-DD format.",
                     error_type="validation_error",
                 )
+            event_data["start_date_local"] = _normalize_date(event_data["start_date_local"])
 
         async with ICUClient(config) as client:
             created_events = await client.bulk_create_events(events_data)

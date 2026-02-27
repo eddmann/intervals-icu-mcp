@@ -113,9 +113,13 @@ async def get_calendar_events(
 
             # Calculate summary
             workout_count = sum(1 for e in events if e.category == "WORKOUT")
-            race_count = sum(1 for e in events if e.category == "RACE")
+            race_count = sum(
+                1
+                for e in events
+                if e.category in ("RACE_A", "RACE_B", "RACE_C")
+            )
             note_count = sum(1 for e in events if e.category == "NOTE")
-            goal_count = sum(1 for e in events if e.category == "GOAL")
+            target_count = sum(1 for e in events if e.category == "TARGET")
 
             summary = {
                 "total_events": len(events),
@@ -123,7 +127,7 @@ async def get_calendar_events(
                     "workouts": workout_count,
                     "races": race_count,
                     "notes": note_count,
-                    "goals": goal_count,
+                    "targets": target_count,
                 },
             }
 
