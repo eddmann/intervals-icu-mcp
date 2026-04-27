@@ -13,6 +13,7 @@ from .models import (
     ActivitySummary,
     Athlete,
     BestEffort,
+    DataCurvePt,
     Event,
     Folder,
     Gear,
@@ -573,6 +574,9 @@ class ICUClient:
     ) -> PowerCurve:
         """Get power curve data (best efforts for various durations).
 
+        Uses the activity-power-curves endpoint which supports date range filtering
+        and returns per-activity parallel arrays. Aggregates to best effort per duration.
+
         Args:
             athlete_id: Athlete ID (uses config default if not provided)
             oldest: Oldest date to include (ISO-8601 format)
@@ -590,8 +594,38 @@ class ICUClient:
         if newest:
             params["newest"] = newest
 
-        response = await self._request("GET", f"/athlete/{athlete_id}/power-curves", params=params)
-        return PowerCurve(**response.json())
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/activity-power-curves", params=params
+        )
+        payload = response.json()
+        secs: list[int] = payload.get("secs") or []
+        curves: list[dict[str, Any]] = payload.get("curves") or []
+
+        # Build best-effort per duration across all activity curves
+        data_points: list[DataCurvePt] = []
+        for i, sec in enumerate(secs):
+            best_watts: int | None = None
+            best_activity_id: str | None = None
+            best_date: str | None = None
+            for curve in curves:
+                watts_list: list[int] = curve.get("watts") or []
+                if i < len(watts_list) and watts_list[i] is not None:
+                    w = watts_list[i]
+                    if best_watts is None or w > best_watts:
+                        best_watts = w
+                        best_activity_id = curve.get("id")
+                        best_date = curve.get("start_date_local")
+            if best_watts is not None:
+                data_points.append(
+                    DataCurvePt(
+                        secs=sec,
+                        watts=best_watts,
+                        src_activity_id=best_activity_id,
+                        date=best_date,
+                    )
+                )
+
+        return PowerCurve(data=data_points)
 
     async def get_hr_curves(
         self,
@@ -600,6 +634,9 @@ class ICUClient:
         newest: str | None = None,
     ) -> HRCurve:
         """Get heart rate curve data (best efforts for various durations).
+
+        Uses the activity-hr-curves endpoint which supports date range filtering
+        and returns per-activity parallel arrays. Aggregates to best effort per duration.
 
         Args:
             athlete_id: Athlete ID (uses config default if not provided)
@@ -610,15 +647,44 @@ class ICUClient:
             HRCurve with best efforts data
         """
         athlete_id = athlete_id or self.config.intervals_icu_athlete_id
-        params = {}
+        params: dict[str, Any] = {}
 
         if oldest:
             params["oldest"] = oldest
         if newest:
             params["newest"] = newest
 
-        response = await self._request("GET", f"/athlete/{athlete_id}/hr-curves", params=params)
-        return HRCurve(**response.json())
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/activity-hr-curves", params=params
+        )
+        payload = response.json()
+        secs: list[int] = payload.get("secs") or []
+        curves: list[dict[str, Any]] = payload.get("curves") or []
+
+        data_points: list[DataCurvePt] = []
+        for i, sec in enumerate(secs):
+            best_bpm: int | None = None
+            best_activity_id: str | None = None
+            best_date: str | None = None
+            for curve in curves:
+                bpm_list: list[int] = curve.get("bpm") or []
+                if i < len(bpm_list) and bpm_list[i] is not None:
+                    b = bpm_list[i]
+                    if best_bpm is None or b > best_bpm:
+                        best_bpm = b
+                        best_activity_id = curve.get("id")
+                        best_date = curve.get("start_date_local")
+            if best_bpm is not None:
+                data_points.append(
+                    DataCurvePt(
+                        secs=sec,
+                        bpm=best_bpm,
+                        src_activity_id=best_activity_id,
+                        date=best_date,
+                    )
+                )
+
+        return HRCurve(data=data_points)
 
     async def get_pace_curves(
         self,
@@ -628,6 +694,9 @@ class ICUClient:
         use_gap: bool = False,
     ) -> PaceCurve:
         """Get pace curve data (best efforts for various durations).
+
+        Uses the activity-pace-curves endpoint which supports date range filtering
+        and returns per-activity parallel arrays. Aggregates to best (fastest) pace per duration.
 
         Args:
             athlete_id: Athlete ID (uses config default if not provided)
@@ -639,7 +708,7 @@ class ICUClient:
             PaceCurve with best efforts data
         """
         athlete_id = athlete_id or self.config.intervals_icu_athlete_id
-        params = {}
+        params: dict[str, Any] = {}
 
         if oldest:
             params["oldest"] = oldest
@@ -648,8 +717,38 @@ class ICUClient:
         if use_gap:
             params["gap"] = "true"
 
-        response = await self._request("GET", f"/athlete/{athlete_id}/pace-curves", params=params)
-        return PaceCurve(**response.json())
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/activity-pace-curves", params=params
+        )
+        payload = response.json()
+        secs: list[int] = payload.get("secs") or []
+        curves: list[dict[str, Any]] = payload.get("curves") or []
+
+        data_points: list[DataCurvePt] = []
+        for i, sec in enumerate(secs):
+            # Best pace = lowest value (faster is smaller min/km)
+            best_pace: float | None = None
+            best_activity_id: str | None = None
+            best_date: str | None = None
+            for curve in curves:
+                pace_list: list[float] = curve.get("pace") or []
+                if i < len(pace_list) and pace_list[i] is not None:
+                    p = pace_list[i]
+                    if best_pace is None or p < best_pace:
+                        best_pace = p
+                        best_activity_id = curve.get("id")
+                        best_date = curve.get("start_date_local")
+            if best_pace is not None:
+                data_points.append(
+                    DataCurvePt(
+                        secs=sec,
+                        pace=best_pace,
+                        src_activity_id=best_activity_id,
+                        date=best_date,
+                    )
+                )
+
+        return PaceCurve(data=data_points)
 
     # ==================== Workout Library Endpoints ====================
 
