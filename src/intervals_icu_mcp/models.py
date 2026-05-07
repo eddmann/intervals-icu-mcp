@@ -3,11 +3,26 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Type aliases for common enums
 ActivityType = Literal["Ride", "Run", "Swim", "Walk", "Hike", "VirtualRide", "VirtualRun", "Other"]
-EventCategory = Literal["WORKOUT", "NOTE", "RACE", "GOAL"]
+EventCategory = Literal[
+    "WORKOUT",
+    "RACE_A",
+    "RACE_B",
+    "RACE_C",
+    "NOTE",
+    "PLAN",
+    "HOLIDAY",
+    "SICK",
+    "INJURED",
+    "SET_EFTP",
+    "FITNESS_DAYS",
+    "SEASON_START",
+    "TARGET",
+    "SET_FITNESS",
+]
 
 
 # ==================== Athlete Models ====================
@@ -27,18 +42,23 @@ class SportSettings(BaseModel):
 class Athlete(BaseModel):
     """Full athlete profile information."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
     name: str
     email: str | None = None
-    weight: float | None = None
-    dob: str | None = None
+    weight: float | None = Field(None, alias="icu_weight")
+    dob: str | None = Field(None, alias="icu_date_of_birth")
     sex: str | None = None
+    city: str | None = None
+    country: str | None = None
     created: datetime | None = None
     ctl: float | None = None
     atl: float | None = None
     tsb: float | None = None
     ramp_rate: float | None = None
-    sport_settings: list[SportSettings] = Field(default_factory=list[SportSettings])
+    icu_resting_hr: int | None = None
+    sport_settings: list[SportSettings] = Field(default_factory=list)
 
 
 class AthleteProfile(BaseModel):
@@ -170,7 +190,7 @@ class Event(BaseModel):
 
     id: int
     start_date_local: str  # ISO-8601 date
-    category: str | None = None  # WORKOUT, NOTE, RACE, GOAL
+    category: str | None = None
     name: str | None = None
     description: str | None = None
     type: str | None = None
@@ -188,8 +208,24 @@ class Event(BaseModel):
     athlete_cannot_edit: bool | None = Field(None, alias="athlete_cannot_edit")
     external_id: str | None = Field(None, alias="external_id")
     created_by_id: str | None = Field(None, alias="created_by_id")
+    workout_doc: dict[str, Any] | None = None
+    indoor: bool | None = None
+    target: str | None = None  # AUTO, POWER, HR, PACE
+    tags: list[str] = Field(default_factory=list)
+    sub_type: str | None = None  # NONE, COMMUTE, WARMUP, COOLDOWN, RACE
+    load_target: int | None = None
+    time_target: int | None = None
+    for_week: bool | None = None
+    carbs_per_hour: int | None = None
+    plan_folder_id: int | None = None
+    plan_workout_id: int | None = None
 
     model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def coerce_tags(cls, v: Any) -> list[str]:
+        return v if v is not None else []
 
 
 # ==================== Workout Library Models ====================
@@ -212,8 +248,25 @@ class Workout(BaseModel):
     indoor: bool | None = None
     color: str | None = None
     type: str | None = None
+    workout_doc: dict[str, Any] | None = None
+    day: int | None = None
+    days: int | None = None
+    target: str | None = None  # AUTO, POWER, HR, PACE
+    targets: list[dict[str, Any]] | None = None
+    tags: list[str] = Field(default_factory=list)
+    sub_type: str | None = None
+    for_week: bool | None = None
+    hide_from_athlete: bool | None = None
+    carbs_per_hour: int | None = None
+    time: str | None = None
+    updated: str | None = None
 
     model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def coerce_tags(cls, v: Any) -> list[str]:
+        return v if v is not None else []
 
 
 class Folder(BaseModel):
@@ -228,6 +281,16 @@ class Folder(BaseModel):
     duration_weeks: int | None = Field(None, alias="duration_weeks")
     hours_per_week_min: int | None = Field(None, alias="hours_per_week_min")
     hours_per_week_max: int | None = Field(None, alias="hours_per_week_max")
+    type: str | None = None  # FOLDER or PLAN
+    visibility: str | None = None  # PRIVATE or PUBLIC
+    rollout_weeks: int | None = None
+    auto_rollout_day: int | None = None
+    read_only_workouts: bool | None = None
+    starting_ctl: int | None = None
+    starting_atl: int | None = None
+    activity_types: list[str] = Field(default_factory=list)
+    workout_targets: list[str] = Field(default_factory=list)
+    blurb: str | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -247,12 +310,21 @@ class DataCurvePt(BaseModel):
 
 
 class PowerCurve(BaseModel):
-    """Power curve data for an athlete."""
+    """Power curve data (DataCurve) from the Intervals.icu API.
 
-    name: str | None = None
-    type: str | None = None
-    athlete_id: str | None = None
-    data: list[DataCurvePt] = Field(default_factory=list[DataCurvePt])
+    secs[i] and values[i] are parallel arrays — values[i] is the peak watts
+    at duration secs[i]. activity_id[i] is the activity where that effort occurred.
+    """
+
+    id: str | None = None
+    label: str | None = None
+    start_date_local: str | None = None
+    end_date_local: str | None = None
+    secs: list[int] = Field(default_factory=list)
+    values: list[int] = Field(default_factory=list)
+    activity_id: list[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class HRCurve(BaseModel):
@@ -261,7 +333,7 @@ class HRCurve(BaseModel):
     name: str | None = None
     type: str | None = None
     athlete_id: str | None = None
-    data: list[DataCurvePt] = Field(default_factory=list[DataCurvePt])
+    data: list[DataCurvePt] = Field(default_factory=list)
 
 
 class PaceCurve(BaseModel):
@@ -270,7 +342,7 @@ class PaceCurve(BaseModel):
     name: str | None = None
     type: str | None = None
     athlete_id: str | None = None
-    data: list[DataCurvePt] = Field(default_factory=list[DataCurvePt])
+    data: list[DataCurvePt] = Field(default_factory=list)
 
 
 # ==================== Training Plan Models ====================
@@ -279,12 +351,24 @@ class PaceCurve(BaseModel):
 class AthleteTrainingPlan(BaseModel):
     """Athlete's current training plan."""
 
-    athlete_id: str | None = Field(None, alias="athlete_id")
-    folder_id: int | None = Field(None, alias="folder_id")
-    plan_name: str | None = Field(None, alias="plan_name")
-    start_date_local: str | None = Field(None, alias="start_date_local")
-    end_date_local: str | None = Field(None, alias="end_date_local")
-    weeks_remaining: int | None = Field(None, alias="weeks_remaining")
+    id: str | None = None
+    training_plan_id: int | None = None
+    training_plan_start_date: str | None = None
+    training_plan_alias: str | None = None
+    training_plan_last_applied: str | None = None
+    timezone: str | None = None
+    training_plan: "Folder | None" = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class SharedWith(BaseModel):
+    """Athlete a folder is shared with."""
+
+    id: str
+    name: str | None = None
+    can_edit: bool | None = Field(None, alias="canEdit")
+    email: str | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -340,9 +424,17 @@ class Interval(BaseModel):
 
 
 class ActivityStreams(BaseModel):
-    """Time-series data streams for an activity."""
+    """Time-series data streams for an activity.
+
+    Note: when fetching all streams (no type filter), the API returns fixed_watts
+    renamed to 'raw_watts'. When specific types are requested including 'watts',
+    fixed_watts is returned as 'watts'.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     watts: list[int | None] | None = None
+    raw_watts: list[int | None] | None = None  # returned when types=null
     heartrate: list[int | None] | None = None
     cadence: list[int | None] | None = None
     velocity_smooth: list[float | None] | None = None
@@ -406,7 +498,7 @@ class Gear(BaseModel):
     distance: float | None = None  # Total distance in meters
     moving_time: int | None = Field(None, alias="moving_time")  # Total time in seconds
     activity_count: int | None = Field(None, alias="activity_count")
-    reminders: list[GearReminder] = Field(default_factory=list[GearReminder])
+    reminders: list[GearReminder] = Field(default_factory=list)
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -426,6 +518,6 @@ class HistogramBin(BaseModel):
 class Histogram(BaseModel):
     """Histogram data for activity metrics."""
 
-    bins: list[HistogramBin] = Field(default_factory=list[HistogramBin])
+    bins: list[HistogramBin] = Field(default_factory=list)
     total_count: int | None = None
     total_secs: int | None = None

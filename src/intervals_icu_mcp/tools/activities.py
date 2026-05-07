@@ -13,6 +13,8 @@ from ..response_builder import ResponseBuilder
 async def get_recent_activities(
     limit: Annotated[int, "Number of activities to fetch"] = 30,
     days_back: Annotated[int, "Number of days to look back"] = 30,
+    oldest: Annotated[str | None, "Oldest date to fetch (YYYY-MM-DD), overrides days_back"] = None,
+    newest: Annotated[str | None, "Newest date to fetch (YYYY-MM-DD), defaults to today"] = None,
     ctx: Context | None = None,
 ) -> str:
     """Get recent activities for the authenticated athlete.
@@ -21,8 +23,10 @@ async def get_recent_activities(
     duration, power, heart rate, and training load.
 
     Args:
-        limit: Number of activities to fetch (default 30, max 100)
-        days_back: Number of days to look back (default 30)
+        limit: Number of activities to fetch (default 30, max 500)
+        days_back: Number of days to look back (default 30, ignored if oldest is provided)
+        oldest: Explicit oldest date (YYYY-MM-DD). Overrides days_back.
+        newest: Explicit newest date (YYYY-MM-DD). Defaults to today.
 
     Returns:
         JSON string with activity summaries
@@ -32,13 +36,15 @@ async def get_recent_activities(
 
     try:
         # Calculate date range
-        oldest_date = datetime.now() - timedelta(days=days_back)
-        oldest = oldest_date.strftime("%Y-%m-%d")
+        if oldest is None:
+            oldest_date = datetime.now() - timedelta(days=days_back)
+            oldest = oldest_date.strftime("%Y-%m-%d")
 
         async with ICUClient(config) as client:
             activities = await client.get_activities(
                 oldest=oldest,
-                limit=min(limit, 100),  # Cap at 100
+                newest=newest,
+                limit=min(limit, 500),  # Cap at 500
             )
 
             if not activities:

@@ -12,6 +12,7 @@ from .models import (
     ActivityStreams,
     ActivitySummary,
     Athlete,
+    AthleteTrainingPlan,
     BestEffort,
     Event,
     Folder,
@@ -22,6 +23,7 @@ from .models import (
     Interval,
     PaceCurve,
     PowerCurve,
+    SharedWith,
     SportSettings,
     Wellness,
     Workout,
@@ -569,6 +571,7 @@ class ICUClient:
         athlete_id: str | None = None,
         oldest: str | None = None,
         newest: str | None = None,
+        sport_type: str = "Ride",
     ) -> PowerCurve:
         """Get power curve data (best efforts for various durations).
 
@@ -576,20 +579,33 @@ class ICUClient:
             athlete_id: Athlete ID (uses config default if not provided)
             oldest: Oldest date to include (ISO-8601 format)
             newest: Newest date to include (ISO-8601 format)
+            sport_type: Sport type (e.g. "Ride", "Run", "Swim"). Required by API.
 
         Returns:
             PowerCurve with best efforts data
         """
+        from datetime import date as _date
+
         athlete_id = athlete_id or self.config.intervals_icu_athlete_id
-        params = {}
 
+        # API uses a 'curves' param: e.g. "1y", "42d", "r.2025-01-01.2025-12-31"
         if oldest:
-            params["oldest"] = oldest
-        if newest:
-            params["newest"] = newest
+            end = newest or _date.today().isoformat()
+            curves = f"r.{oldest}.{end}"
+        else:
+            curves = "1y"
 
-        response = await self._request("GET", f"/athlete/{athlete_id}/power-curves", params=params)
-        return PowerCurve(**response.json())
+        params: dict[str, str] = {"type": sport_type, "curves": curves}
+
+        # Endpoint requires .json extension; returns DataCurveSetPowerCurve
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/power-curves.json", params=params
+        )
+        data = response.json()
+        curves_list = data.get("list", [])
+        if not curves_list:
+            return PowerCurve()
+        return PowerCurve(**curves_list[0])
 
     async def get_hr_curves(
         self,
@@ -706,7 +722,15 @@ class ICUClient:
             params["types"] = ",".join(streams)
 
         response = await self._request("GET", f"/activity/{activity_id}/streams", params=params)
-        return ActivityStreams(**response.json())
+        # API returns a list of stream objects: [{type, name, data, ...}, ...]
+        # Convert to a dict keyed by stream type for the ActivityStreams model
+        streams_dict: dict[str, Any] = {}
+        for stream_obj in response.json():
+            stream_type = stream_obj.get("type")
+            stream_data = stream_obj.get("data")
+            if stream_type and stream_data is not None:
+                streams_dict[stream_type] = stream_data
+        return ActivityStreams(**streams_dict)
 
     async def get_best_efforts(
         self,
@@ -1137,3 +1161,441 @@ class ICUClient:
             json={"start_date_local": new_date},
         )
         return Event(**response.json())
+
+    # ==================== Workout CRUD Endpoints ====================
+
+    async def get_workouts(
+        self,
+        athlete_id: str | None = None,
+    ) -> list[Workout]:
+        """List all workouts in the athlete's library.
+
+        Args:
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            List of Workout objects
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("GET", f"/athlete/{athlete_id}/workouts")
+        adapter = TypeAdapter(list[Workout])
+        return adapter.validate_python(response.json())
+
+    async def get_workout(
+        self,
+        workout_id: int,
+        athlete_id: str | None = None,
+    ) -> Workout:
+        """Get a single workout by ID.
+
+        Args:
+            workout_id: Workout ID
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Workout object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("GET", f"/athlete/{athlete_id}/workouts/{workout_id}")
+        return Workout(**response.json())
+
+    async def create_workout(
+        self,
+        workout_data: dict[str, Any],
+        athlete_id: str | None = None,
+    ) -> Workout:
+        """Create a new workout in a folder.
+
+        Args:
+            workout_data: Workout data dictionary (must include folder_id)
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Created Workout object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("POST", f"/athlete/{athlete_id}/workouts", json=workout_data)
+        return Workout(**response.json())
+
+    async def update_workout(
+        self,
+        workout_id: int,
+        workout_data: dict[str, Any],
+        athlete_id: str | None = None,
+    ) -> Workout:
+        """Update an existing workout.
+
+        Args:
+            workout_id: Workout ID
+            workout_data: Updated workout data dictionary
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Updated Workout object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request(
+            "PUT", f"/athlete/{athlete_id}/workouts/{workout_id}", json=workout_data
+        )
+        return Workout(**response.json())
+
+    async def delete_workout(
+        self,
+        workout_id: int,
+        delete_related: bool = False,
+        athlete_id: str | None = None,
+    ) -> bool:
+        """Delete a workout.
+
+        Args:
+            workout_id: Workout ID
+            delete_related: Also delete workouts added at the same time on a plan
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            True if deletion was successful
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        params: dict[str, Any] = {}
+        if delete_related:
+            params["others"] = "true"
+        await self._request("DELETE", f"/athlete/{athlete_id}/workouts/{workout_id}", params=params)
+        return True
+
+    async def bulk_create_workouts(
+        self,
+        workouts_data: list[dict[str, Any]],
+        athlete_id: str | None = None,
+    ) -> list[Workout]:
+        """Create multiple workouts in a single request.
+
+        Args:
+            workouts_data: List of workout data dictionaries
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            List of created Workout objects
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request(
+            "POST", f"/athlete/{athlete_id}/workouts/bulk", json=workouts_data
+        )
+        adapter = TypeAdapter(list[Workout])
+        return adapter.validate_python(response.json())
+
+    async def get_workout_tags(
+        self,
+        athlete_id: str | None = None,
+    ) -> list[str]:
+        """List all workout tags for an athlete.
+
+        Args:
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            List of tag strings
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("GET", f"/athlete/{athlete_id}/workout-tags")
+        return response.json()
+
+    async def duplicate_workouts(
+        self,
+        workout_ids: list[int],
+        num_copies: int = 1,
+        weeks_between: int = 1,
+        athlete_id: str | None = None,
+    ) -> list[Workout]:
+        """Duplicate workouts on a plan.
+
+        Args:
+            workout_ids: List of workout IDs to duplicate
+            num_copies: Number of copies to create
+            weeks_between: Weeks between each copy
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            List of created Workout objects
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        payload = {
+            "workoutIds": workout_ids,
+            "numCopies": num_copies,
+            "weeksBetween": weeks_between,
+        }
+        response = await self._request(
+            "POST", f"/athlete/{athlete_id}/duplicate-workouts", json=payload
+        )
+        adapter = TypeAdapter(list[Workout])
+        return adapter.validate_python(response.json())
+
+    # ==================== Folder CRUD Endpoints ====================
+
+    async def create_folder(
+        self,
+        folder_data: dict[str, Any],
+        athlete_id: str | None = None,
+    ) -> Folder:
+        """Create a new workout folder or training plan.
+
+        Args:
+            folder_data: Folder data dictionary (must include name)
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Created Folder object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("POST", f"/athlete/{athlete_id}/folders", json=folder_data)
+        return Folder(**response.json())
+
+    async def update_folder(
+        self,
+        folder_id: int,
+        folder_data: dict[str, Any],
+        athlete_id: str | None = None,
+    ) -> Folder:
+        """Update an existing folder or training plan.
+
+        Args:
+            folder_id: Folder ID
+            folder_data: Updated folder data dictionary
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Updated Folder object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request(
+            "PUT", f"/athlete/{athlete_id}/folders/{folder_id}", json=folder_data
+        )
+        return Folder(**response.json())
+
+    async def delete_folder(
+        self,
+        folder_id: int,
+        athlete_id: str | None = None,
+    ) -> bool:
+        """Delete a folder and all its workouts.
+
+        Args:
+            folder_id: Folder ID
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            True if deletion was successful
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        await self._request("DELETE", f"/athlete/{athlete_id}/folders/{folder_id}")
+        return True
+
+    async def update_plan_workouts(
+        self,
+        folder_id: int,
+        workout_data: dict[str, Any],
+        oldest: str | None = None,
+        newest: str | None = None,
+        athlete_id: str | None = None,
+    ) -> list[Workout]:
+        """Batch update workouts on a plan.
+
+        Args:
+            folder_id: Folder/plan ID
+            workout_data: Fields to update on matching workouts
+            oldest: Oldest date in range (ISO-8601)
+            newest: Newest date in range (ISO-8601)
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            List of updated Workout objects
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        params: dict[str, Any] = {}
+        if oldest:
+            params["oldest"] = oldest
+        if newest:
+            params["newest"] = newest
+        response = await self._request(
+            "PUT",
+            f"/athlete/{athlete_id}/folders/{folder_id}/workouts",
+            json=workout_data,
+            params=params,
+        )
+        adapter = TypeAdapter(list[Workout])
+        return adapter.validate_python(response.json())
+
+    async def get_folder_shared_with(
+        self,
+        folder_id: int,
+        athlete_id: str | None = None,
+    ) -> list[SharedWith]:
+        """List athletes a folder is shared with.
+
+        Args:
+            folder_id: Folder ID
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            List of SharedWith objects
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/folders/{folder_id}/shared-with"
+        )
+        adapter = TypeAdapter(list[SharedWith])
+        return adapter.validate_python(response.json())
+
+    async def update_folder_shared_with(
+        self,
+        folder_id: int,
+        shared_with: list[dict[str, Any]],
+        athlete_id: str | None = None,
+    ) -> list[SharedWith]:
+        """Add or remove athletes from a folder's share list.
+
+        Args:
+            folder_id: Folder ID
+            shared_with: List of dicts with athlete id and canEdit flag
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Updated list of SharedWith objects
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request(
+            "PUT",
+            f"/athlete/{athlete_id}/folders/{folder_id}/shared-with",
+            json=shared_with,
+        )
+        adapter = TypeAdapter(list[SharedWith])
+        return adapter.validate_python(response.json())
+
+    # ==================== Training Plan Endpoints ====================
+
+    async def get_training_plan(
+        self,
+        athlete_id: str | None = None,
+    ) -> AthleteTrainingPlan:
+        """Get the athlete's current training plan.
+
+        Args:
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            AthleteTrainingPlan object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("GET", f"/athlete/{athlete_id}/training-plan")
+        return AthleteTrainingPlan(**response.json())
+
+    async def set_training_plan(
+        self,
+        plan_data: dict[str, Any],
+        athlete_id: str | None = None,
+    ) -> AthleteTrainingPlan:
+        """Set or change the athlete's training plan.
+
+        Args:
+            plan_data: Plan data (training_plan_id, training_plan_start_date, optional alias)
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Updated AthleteTrainingPlan object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request(
+            "PUT", f"/athlete/{athlete_id}/training-plan", json=plan_data
+        )
+        return AthleteTrainingPlan(**response.json())
+
+    async def apply_plan_changes(
+        self,
+        athlete_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply pending training plan changes to the calendar.
+
+        Args:
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Result of applying plan changes
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("PUT", f"/athlete/{athlete_id}/apply-plan-changes")
+        return response.json()
+
+    # ==================== Workout File Import/Export Endpoints ====================
+
+    async def import_workout(
+        self,
+        folder_id: int,
+        file_content: bytes,
+        filename: str,
+        activity_type: str | None = None,
+        athlete_id: str | None = None,
+    ) -> Workout:
+        """Import a workout file (.zwo, .mrc, .erg, or .fit) into a folder.
+
+        Args:
+            folder_id: Folder ID to import into
+            file_content: Raw file bytes
+            filename: Original filename with extension
+            activity_type: Activity type (e.g., Ride, Run)
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            Imported Workout object
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        params: dict[str, Any] = {}
+        if activity_type:
+            params["type"] = activity_type
+        files = {"file": (filename, file_content)}
+        response = await self._request(
+            "POST",
+            f"/athlete/{athlete_id}/folders/{folder_id}/import-workout",
+            files=files,
+            params=params,
+        )
+        return Workout(**response.json())
+
+    async def download_workout(
+        self,
+        workout_data: dict[str, Any],
+        ext: str,
+        athlete_id: str | None = None,
+    ) -> bytes:
+        """Convert a workout to a file format (.zwo, .mrc, .erg, or .fit).
+
+        Args:
+            workout_data: Workout data to convert
+            ext: File extension (zwo, mrc, erg, or fit)
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            File content as bytes
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        ext_with_dot = f".{ext.lstrip('.')}"
+        response = await self._request(
+            "POST",
+            f"/athlete/{athlete_id}/download-workout{ext_with_dot}",
+            json=workout_data,
+        )
+        return response.content
+
+    async def download_workouts_zip(
+        self,
+        athlete_id: str | None = None,
+    ) -> bytes:
+        """Download all workouts as a ZIP archive.
+
+        Args:
+            athlete_id: Athlete ID (uses config default if not provided)
+
+        Returns:
+            ZIP file content as bytes
+        """
+        athlete_id = athlete_id or self.config.intervals_icu_athlete_id
+        response = await self._request("GET", f"/athlete/{athlete_id}/workouts.zip")
+        return response.content

@@ -50,6 +50,14 @@ from .tools.event_management import (
     update_event,
 )
 from .tools.events import get_calendar_events, get_event, get_upcoming_workouts
+from .tools.folder_management import (
+    create_folder,
+    delete_folder,
+    get_folder_sharing,
+    update_folder,
+    update_folder_sharing,
+    update_plan_workouts,
+)
 from .tools.gear import (
     create_gear,
     create_gear_reminder,
@@ -66,8 +74,22 @@ from .tools.sport_settings import (
     get_sport_settings,
     update_sport_settings,
 )
+from .tools.training_plan import apply_plan_changes, get_training_plan, set_training_plan
 from .tools.wellness import get_wellness_data, get_wellness_for_date, update_wellness
-from .tools.workout_library import get_workout_library, get_workouts_in_folder
+from .tools.workout_library import (
+    bulk_create_workouts,
+    create_workout,
+    delete_workout,
+    download_all_workouts,
+    duplicate_workouts,
+    export_workout,
+    get_workout,
+    get_workout_library,
+    get_workout_tags,
+    get_workouts_in_folder,
+    import_workout,
+    update_workout,
+)
 
 # Register activity tools
 mcp.tool()(get_recent_activities)
@@ -119,6 +141,29 @@ mcp.tool()(get_pace_curves)
 # Register workout library tools
 mcp.tool()(get_workout_library)
 mcp.tool()(get_workouts_in_folder)
+mcp.tool()(get_workout)
+mcp.tool()(create_workout)
+mcp.tool()(update_workout)
+mcp.tool()(delete_workout)
+mcp.tool()(bulk_create_workouts)
+mcp.tool()(get_workout_tags)
+mcp.tool()(duplicate_workouts)
+mcp.tool()(import_workout)
+mcp.tool()(export_workout)
+mcp.tool()(download_all_workouts)
+
+# Register folder management tools
+mcp.tool()(create_folder)
+mcp.tool()(update_folder)
+mcp.tool()(delete_folder)
+mcp.tool()(update_plan_workouts)
+mcp.tool()(get_folder_sharing)
+mcp.tool()(update_folder_sharing)
+
+# Register training plan tools
+mcp.tool()(get_training_plan)
+mcp.tool()(set_training_plan)
+mcp.tool()(apply_plan_changes)
 
 # Register gear management tools
 mcp.tool()(get_gear_list)
@@ -332,8 +377,10 @@ Then offer to create the events in my calendar if I approve the plan."""
 
 def main():
     """Main entry point for the Intervals.icu MCP server."""
-    # Run the server with stdio transport (default)
-    mcp.run()
+    import os
+
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    mcp.run(transport=transport)
 
 
 if __name__ == "__main__":

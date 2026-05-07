@@ -8,15 +8,17 @@ A Model Context Protocol (MCP) server for Intervals.icu integration. Access your
 
 ## Overview
 
-This MCP server provides 48 tools to interact with your Intervals.icu account, organized into 9 categories:
+This MCP server provides 67 tools to interact with your Intervals.icu account, organized into 12 categories:
 
 - Activities (10 tools) - Query, search, update, delete, and download activities
 - Activity Analysis (8 tools) - Deep dive into streams, intervals, best efforts, and histograms
 - Athlete (2 tools) - Access profile, fitness metrics, and training load
 - Wellness (3 tools) - Track and update recovery, HRV, sleep, and health metrics
-- Events/Calendar (9 tools) - Manage planned workouts, races, notes with bulk operations
+- Events/Calendar (9 tools) - Manage planned workouts, races, notes with bulk operations and structured workout support
 - Performance/Curves (3 tools) - Analyze power, heart rate, and pace curves
-- Workout Library (2 tools) - Browse and explore workout templates and plans
+- Workout Library (12 tools) - Full CRUD for workouts, file import/export, tags, and duplication
+- Folder Management (6 tools) - Create and manage workout folders and training plans with sharing
+- Training Plan (3 tools) - Assign training plans and sync them to the calendar
 - Gear Management (6 tools) - Track equipment and maintenance reminders
 - Sport Settings (5 tools) - Configure FTP, FTHR, pace thresholds, and zones
 
@@ -209,10 +211,37 @@ _Note: The athlete profile resource (`intervals-icu://athlete/profile`) automati
 ```
 "What workouts do I have planned this week?"
 "Create a threshold workout for tomorrow"
-"Update my workout on Friday"
+"Update my workout on Friday - change it to a recovery ride"
 "Delete the workout on Saturday"
 "Duplicate this week's plan for next week"
 "Create 5 workouts for my build phase"
+"Create a structured 3x10min threshold workout with power targets"
+"Schedule a race A event on June 15th"
+"Mark next Monday as a rest day"
+```
+
+### Workout Library
+
+```
+"Show me my workout library"
+"What workouts are in my threshold folder?"
+"Create a new structured 5x5min VO2max workout in my interval folder"
+"Update the workout_doc for my FTP test workout"
+"Import this .zwo file into my library"
+"Export my threshold workout as a .zwo file"
+"Duplicate my base week workouts 4 times with 1 week between"
+"What tags do I use in my workout library?"
+```
+
+### Folder & Training Plan Management
+
+```
+"Create a new 16-week base build training plan"
+"Show me which athletes I've shared my plan with"
+"Share my training plan with my coach"
+"What training plan am I currently on?"
+"Switch me to the 12-week race prep plan starting May 1st"
+"Apply my training plan changes to my calendar"
 ```
 
 ### Performance Analysis
@@ -221,13 +250,6 @@ _Note: The athlete profile resource (`intervals-icu://athlete/profile`) automati
 "What's my 20-minute power and FTP?"
 "Show me my heart rate zones"
 "Analyze my running pace curve"
-```
-
-### Workout Library
-
-```
-"Show me my workout library"
-"What workouts are in my threshold folder?"
 ```
 
 ### Gear Management
@@ -295,17 +317,19 @@ _Note: The athlete profile resource (`intervals-icu://athlete/profile`) automati
 
 ### Events/Calendar (9 tools)
 
-| Tool                    | Description                                                |
-| ----------------------- | ---------------------------------------------------------- |
-| `get-calendar-events`   | Get planned events and workouts from calendar              |
-| `get-upcoming-workouts` | Get upcoming planned workouts only                         |
-| `get-event`             | Get details for a specific event                           |
-| `create-event`          | Create new calendar events (workouts, races, notes, goals) |
-| `update-event`          | Modify existing calendar events                            |
-| `delete-event`          | Remove events from calendar                                |
-| `bulk-create-events`    | Create multiple events in a single operation               |
-| `bulk-delete-events`    | Delete multiple events in a single operation               |
-| `duplicate-event`       | Duplicate an event to a new date                           |
+| Tool                    | Description                                                                                               |
+| ----------------------- | --------------------------------------------------------------------------------------------------------- |
+| `get-calendar-events`   | Get planned events and workouts from calendar                                                             |
+| `get-upcoming-workouts` | Get upcoming planned workouts only                                                                        |
+| `get-event`             | Get details for a specific event                                                                          |
+| `create-event`          | Create events with all 14 categories, structured `workout_doc`, tags, indoor flag, and target metric      |
+| `update-event`          | Modify existing events including workout structure, tags, and targets                                     |
+| `delete-event`          | Remove events from calendar                                                                               |
+| `bulk-create-events`    | Create multiple events in a single operation                                                              |
+| `bulk-delete-events`    | Delete multiple events in a single operation                                                              |
+| `duplicate-event`       | Duplicate an event (including its workout structure) to a new date                                        |
+
+Supported event categories: `WORKOUT`, `RACE_A`, `RACE_B`, `RACE_C`, `NOTE`, `PLAN`, `HOLIDAY`, `SICK`, `INJURED`, `SET_EFTP`, `FITNESS_DAYS`, `SEASON_START`, `TARGET`, `SET_FITNESS`
 
 ### Performance/Curves (3 tools)
 
@@ -315,12 +339,41 @@ _Note: The athlete profile resource (`intervals-icu://athlete/profile`) automati
 | `get-hr-curves`    | Analyze heart rate curves with HR zones                  |
 | `get-pace-curves`  | Analyze running/swimming pace curves with optional GAP   |
 
-### Workout Library (2 tools)
+### Workout Library (12 tools)
 
-| Tool                     | Description                               |
-| ------------------------ | ----------------------------------------- |
-| `get-workout-library`    | Browse workout folders and training plans |
-| `get-workouts-in-folder` | View all workouts in a specific folder    |
+| Tool                     | Description                                                                 |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `get-workout-library`    | Browse workout folders and training plans                                   |
+| `get-workouts-in-folder` | View all workouts in a specific folder                                      |
+| `get-workout`            | Get full details for a single workout including structured `workout_doc`    |
+| `create-workout`         | Create a workout in a folder with optional intervals and power/HR/pace targets |
+| `update-workout`         | Update workout fields, structure, tags, or visibility                       |
+| `delete-workout`         | Delete a workout (optionally including related plan copies)                 |
+| `bulk-create-workouts`   | Create multiple workouts in a single operation                              |
+| `get-workout-tags`       | List all tags used across the workout library                               |
+| `duplicate-workouts`     | Duplicate workouts on a training plan with configurable spacing             |
+| `import-workout`         | Import a .zwo, .mrc, .erg, or .fit file into a folder (base64 input)       |
+| `export-workout`         | Convert a workout to .zwo, .mrc, .erg, or .fit format (base64 output)      |
+| `download-all-workouts`  | Download all workouts as a ZIP archive (base64 output)                      |
+
+### Folder Management (6 tools)
+
+| Tool                    | Description                                                              |
+| ----------------------- | ------------------------------------------------------------------------ |
+| `create-folder`         | Create a workout folder or training plan (FOLDER or PLAN type)           |
+| `update-folder`         | Update folder metadata, visibility, or plan settings                     |
+| `delete-folder`         | Delete a folder and all its workouts                                     |
+| `update-plan-workouts`  | Batch update workouts on a plan (e.g., hide from athlete) with date range |
+| `get-folder-sharing`    | List athletes a folder is shared with                                    |
+| `update-folder-sharing` | Add or remove athletes from a folder's share list                        |
+
+### Training Plan (3 tools)
+
+| Tool                  | Description                                                        |
+| --------------------- | ------------------------------------------------------------------ |
+| `get-training-plan`   | Get the athlete's current training plan assignment                 |
+| `set-training-plan`   | Assign or change the active training plan with a start date        |
+| `apply-plan-changes`  | Sync pending training plan changes to the athlete's calendar       |
 
 ### Gear Management (6 tools)
 

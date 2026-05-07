@@ -56,6 +56,7 @@ async def get_activity_streams(
 
             for stream_name in [
                 "watts",
+                "raw_watts",
                 "heartrate",
                 "cadence",
                 "velocity_smooth",

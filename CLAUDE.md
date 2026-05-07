@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an MCP (Model Context Protocol) server for Intervals.icu that provides 40+ tools, 1 resource, and 6 prompts for accessing training data, wellness metrics, and performance analysis through Claude and other LLMs.
+This is an MCP (Model Context Protocol) server for Intervals.icu that provides 67 tools, 1 resource, and 6 prompts for accessing training data, wellness metrics, and performance analysis through Claude and other LLMs.
 
 ## Development Commands
 
@@ -114,19 +114,21 @@ make docker/run
 
 ### Tool Organization
 
-Tools are organized into 7 categories in `tools/`:
+Tools are organized into 13 modules in `tools/`:
 
 1. **activities.py** - Query and manage activities
 2. **activity_analysis.py** - Streams, intervals, best efforts
 3. **athlete.py** - Profile and fitness metrics (CTL/ATL/TSB)
 4. **wellness.py** - HRV, sleep, recovery metrics
 5. **events.py** - Calendar queries
-6. **event_management.py** - Create/update/delete events
+6. **event_management.py** - Create/update/delete events; supports `workout_doc`, tags, indoor, target, all 14 event categories
 7. **performance.py** - Power/HR/pace curves
 8. **curves.py** - HR and pace curve analysis
-9. **workout_library.py** - Browse workout folders and plans
-10. **gear.py** - Manage gear and reminders
-11. **sport_settings.py** - FTP, FTHR, pace thresholds
+9. **workout_library.py** - Full workout CRUD, file import/export (.zwo/.mrc/.erg/.fit), tags, duplication
+10. **folder_management.py** - Create/update/delete folders and training plans, folder sharing
+11. **training_plan.py** - Assign training plans to athletes, apply plan changes to calendar
+12. **gear.py** - Manage gear and reminders
+13. **sport_settings.py** - FTP, FTHR, pace thresholds
 
 ### Tool Pattern
 

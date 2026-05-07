@@ -110,15 +110,18 @@ def mock_event_data():
 
 @pytest.fixture
 def mock_power_curve_data():
-    """Sample power curve data for testing."""
+    """Sample power curve data matching DataCurveSetPowerCurve API response."""
     return {
-        "name": "Power Curve",
-        "type": "power",
-        "athlete_id": "i123456",
-        "data": [
-            {"secs": 5, "watts": 800, "date": "2025-10-01"},
-            {"secs": 60, "watts": 400, "date": "2025-10-05"},
-            {"secs": 300, "watts": 300, "date": "2025-10-08"},
-            {"secs": 1200, "watts": 250, "date": "2025-10-12"},
+        "list": [
+            {
+                "id": "1y",
+                "label": "past year",
+                "start_date_local": "2025-03-24",
+                "end_date_local": "2026-03-24",
+                "secs": [5, 60, 300, 1200, 3600],
+                "values": [800, 400, 300, 250, 200],
+                "activity_id": ["act1", "act2", "act3", "act4", "act5"],
+            }
         ],
+        "activities": {},
     }
