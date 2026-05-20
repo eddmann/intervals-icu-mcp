@@ -59,6 +59,7 @@ from .tools.gear import (
     update_gear_reminder,
 )
 from .tools.performance import get_power_curves
+from .tools.routes import analyze_route_climbs
 from .tools.sport_settings import (
     apply_sport_settings,
     create_sport_settings,
@@ -119,6 +120,9 @@ mcp.tool()(get_pace_curves)
 # Register workout library tools
 mcp.tool()(get_workout_library)
 mcp.tool()(get_workouts_in_folder)
+
+# Register route analysis tools
+mcp.tool()(analyze_route_climbs)
 
 # Register gear management tools
 mcp.tool()(get_gear_list)

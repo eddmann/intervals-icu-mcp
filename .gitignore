@@ -57,5 +57,8 @@ exports/
 *.tcx
 *.fit
 
+# Synthetic test fixtures are intentionally tracked.
+!tests/fixtures/routes/*.gpx
+
 # Logs
 *.log
