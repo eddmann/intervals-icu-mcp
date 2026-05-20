@@ -237,45 +237,47 @@ class Folder(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-# ==================== Power Curve Models ====================
+# ==================== Power / HR / Pace Curve Models ====================
+#
+# The Intervals.icu power/HR/pace-curves endpoints return parallel arrays inside
+# a list of "curves" (one per requested time window). For power and HR, x = secs
+# (duration) and y = values (watts or bpm). For pace, x = distance (meters) and
+# y = values (time-in-seconds to cover that distance).
 
 
-class DataCurvePt(BaseModel):
-    """Single point on a power/HR/pace curve."""
+class DataCurve(BaseModel):
+    """One mean-max curve over a single time window (e.g. "1y", "90d")."""
 
-    secs: int  # Duration in seconds
-    watts: int | None = None  # For power curves
-    bpm: int | None = None  # For HR curves
-    pace: float | None = None  # For pace curves (min/km)
-    src_activity_id: str | None = None  # Activity where this effort occurred
-    date: str | None = None  # Date of the effort
-
-
-class PowerCurve(BaseModel):
-    """Power curve data for an athlete."""
-
-    name: str | None = None
-    type: str | None = None
-    athlete_id: str | None = None
-    data: list[DataCurvePt] = Field(default_factory=list[DataCurvePt])
-
-
-class HRCurve(BaseModel):
-    """Heart rate curve data for an athlete."""
-
-    name: str | None = None
-    type: str | None = None
-    athlete_id: str | None = None
-    data: list[DataCurvePt] = Field(default_factory=list[DataCurvePt])
+    id: str | None = None
+    label: str | None = None
+    days: int | None = None
+    start_date_local: str | None = None
+    end_date_local: str | None = None
+    moving_time: int | None = None
+    training_load: int | None = None
+    weight: float | None = None
+    # Power & HR curves: duration in seconds at each index.
+    secs: list[int] = Field(default_factory=list[int])
+    # Pace curves: distance in meters at each index.
+    distance: list[float] = Field(default_factory=list[float])
+    # Y-axis values: watts (power), bpm (HR), or time-in-seconds (pace).
+    values: list[int] = Field(default_factory=list[int])
+    # ID of the activity where each peak effort occurred (parallel to secs/distance).
+    activity_id: list[str] = Field(default_factory=list[str])
 
 
-class PaceCurve(BaseModel):
-    """Pace curve data for an athlete."""
+class DataCurveSet(BaseModel):
+    """Response from /athlete/{id}/{power|hr|pace}-curves.json.
 
-    name: str | None = None
-    type: str | None = None
-    athlete_id: str | None = None
-    data: list[DataCurvePt] = Field(default_factory=list[DataCurvePt])
+    Contains one or more curves (one per requested window) plus a mapping from
+    activity id to Activity for source activities referenced by activity_id.
+    """
+
+    # API returns the field as "list" which is a Python keyword; expose as "curves".
+    curves: list[DataCurve] = Field(default_factory=list[DataCurve], alias="list")
+    activities: dict[str, Any] = Field(default_factory=dict[str, Any])
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # ==================== Training Plan Models ====================

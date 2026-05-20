@@ -1,13 +1,47 @@
 """Performance analysis tools for Intervals.icu MCP server."""
 
-from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from fastmcp import Context
 
 from ..auth import ICUConfig
 from ..client import ICUAPIError, ICUClient
+from ..models import DataCurve
 from ..response_builder import ResponseBuilder
+
+
+def curves_param(days_back: int | None, time_period: str | None) -> tuple[str, str]:
+    """Translate user-facing time selectors into the API's `curves` query value.
+
+    Returns (curves_param, human_label). Shared between power and HR/pace tools.
+    """
+    if days_back is not None and days_back > 0:
+        return f"{days_back}d", f"{days_back}_days"
+    if time_period:
+        m = {"week": ("7d", "week"), "month": ("30d", "month"), "year": ("1y", "year")}
+        key = time_period.lower()
+        if key in m:
+            return m[key]
+        if key == "all":
+            return "all", "all_time"
+    # Preserve the prior default of 90 days.
+    return "90d", "90_days"
+
+
+def curve_points(curve: DataCurve) -> list[dict[str, Any]]:
+    """Flatten a power/HR curve's parallel secs / values / activity_id arrays.
+
+    Each point has secs (duration), value (watts or bpm), and optionally activity_id.
+    Shared between power and HR tools.
+    """
+    points: list[dict[str, Any]] = []
+    n = min(len(curve.secs), len(curve.values))
+    for i in range(n):
+        pt: dict[str, Any] = {"secs": curve.secs[i], "value": curve.values[i]}
+        if i < len(curve.activity_id):
+            pt["activity_id"] = curve.activity_id[i]
+        points.append(pt)
+    return points
 
 
 async def get_power_curves(
@@ -18,75 +52,48 @@ async def get_power_curves(
     ] = None,
     sport_type: Annotated[
         str | None,
-        "Activity type: 'Ride', 'Run', 'Swim', etc. (optional, defaults to Ride)",
+        "Activity type: 'Ride', 'Run', 'Swim', etc. (defaults to 'Ride')",
     ] = None,
     ctx: Context | None = None,
 ) -> str:
-    """Get power curve data showing best efforts for various durations.
+    """Get power mean-max curve and an FTP estimate from 20-min power.
 
-    Analyzes power data across activities to find peak power outputs for
-    different time durations (e.g., 5 seconds, 1 minute, 5 minutes, 20 minutes).
-
-    Useful for tracking performance improvements and identifying strengths/weaknesses
-    across different power duration profiles.
+    Returns peak power outputs at standard durations (5s, 15s, 30s, 1m, 2m, 5m,
+    10m, 20m, 1h) plus a Coggan-style FTP estimate (95% of 20-min power) and
+    derived power zones when 20-min data is present.
 
     Args:
-        days_back: Number of days to analyze (overrides time_period)
-        time_period: Time period shorthand - 'week' (7 days), 'month' (30 days),
-                     'year' (365 days), 'all' (all time). Default is 90 days.
+        days_back: Number of days to analyze (overrides time_period).
+        time_period: 'week' (7d), 'month' (30d), 'year' (1y), 'all'. Default 90 days.
+        sport_type: Activity type. Defaults to 'Ride'.
 
     Returns:
-        JSON string with power curve data
+        JSON string with power curve data and FTP analysis.
     """
     assert ctx is not None
     config: ICUConfig = ctx.get_state("config")
 
+    curves_value, period_label = curves_param(days_back, time_period)
+    sport = sport_type or "Ride"
+
     try:
-        # Determine date range
-        oldest = None
-
-        if days_back is not None:
-            oldest_date = datetime.now() - timedelta(days=days_back)
-            oldest = oldest_date.strftime("%Y-%m-%d")
-            period_label = f"{days_back}_days"
-        elif time_period:
-            period_map = {
-                "week": 7,
-                "month": 30,
-                "year": 365,
-            }
-            if time_period.lower() in period_map:
-                days = period_map[time_period.lower()]
-                oldest_date = datetime.now() - timedelta(days=days)
-                oldest = oldest_date.strftime("%Y-%m-%d")
-                period_label = time_period.lower()
-            elif time_period.lower() == "all":
-                oldest = None
-                period_label = "all_time"
-            else:
-                return ResponseBuilder.build_error_response(
-                    "Invalid time_period. Use 'week', 'month', 'year', or 'all'",
-                    error_type="validation_error",
-                )
-        else:
-            # Default to 90 days
-            oldest_date = datetime.now() - timedelta(days=90)
-            oldest = oldest_date.strftime("%Y-%m-%d")
-            period_label = "90_days"
-
         async with ICUClient(config) as client:
-            power_curve = await client.get_power_curves(oldest=oldest, sport_type=sport_type)
+            curve_set = await client.get_power_curves(sport_type=sport, curves=curves_value)
 
-            if not power_curve.data or len(power_curve.data) == 0:
+            if not curve_set.curves or not curve_set.curves[0].secs:
                 return ResponseBuilder.build_response(
-                    data={"power_curve": [], "period": period_label},
+                    data={"power_curve": [], "period": period_label, "sport_type": sport},
                     metadata={
-                        "message": f"No power curve data available for {period_label}. "
-                        "Complete some rides with power to build your power curve."
+                        "message": (
+                            f"No power curve data available for {sport} over {period_label}. "
+                            "Complete some activities with power for this sport to build the curve."
+                        )
                     },
                 )
 
-            # Key durations to highlight (in seconds)
+            curve = curve_set.curves[0]
+            points = curve_points(curve)
+
             key_durations = {
                 5: "5_sec",
                 15: "15_sec",
@@ -98,101 +105,74 @@ async def get_power_curves(
                 1200: "20_min",
                 3600: "1_hour",
             }
-
-            # Find data points for key durations
             peak_efforts: dict[str, dict[str, Any]] = {}
             for seconds, label in key_durations.items():
-                # Find closest data point
-                closest_point = min(
-                    power_curve.data,
-                    key=lambda p: abs(p.secs - seconds),
-                    default=None,
-                )
-
-                if closest_point and abs(closest_point.secs - seconds) <= seconds * 0.1:
-                    # Only include if within 10% of target duration
+                closest = min(points, key=lambda p: abs(p["secs"] - seconds), default=None)
+                if closest and abs(closest["secs"] - seconds) <= max(1, seconds * 0.1):
                     effort: dict[str, Any] = {
-                        "watts": closest_point.watts,
-                        "duration_seconds": closest_point.secs,
+                        "watts": closest["value"],
+                        "duration_seconds": closest["secs"],
                     }
-                    if closest_point.date:
-                        effort["date"] = closest_point.date
-                    if closest_point.src_activity_id:
-                        effort["activity_id"] = closest_point.src_activity_id
-
+                    if "activity_id" in closest:
+                        effort["activity_id"] = closest["activity_id"]
                     peak_efforts[label] = effort
 
-            # Calculate summary statistics
-            max_power_point = max(power_curve.data, key=lambda p: p.watts or 0)
-            min_duration = min(power_curve.data, key=lambda p: p.secs)
-            max_duration = max(power_curve.data, key=lambda p: p.secs)
-
+            max_pt = max(points, key=lambda p: p["value"])
             summary: dict[str, Any] = {
-                "total_data_points": len(power_curve.data),
-                "max_power_watts": max_power_point.watts,
-                "max_power_duration_seconds": max_power_point.secs,
+                "total_data_points": len(points),
+                "max_power_watts": max_pt["value"],
+                "max_power_duration_seconds": max_pt["secs"],
                 "duration_range": {
-                    "min_seconds": min_duration.secs,
-                    "max_seconds": max_duration.secs,
+                    "min_seconds": points[0]["secs"],
+                    "max_seconds": points[-1]["secs"],
                 },
+                "curve_label": curve.label,
+                "curve_start_date": curve.start_date_local,
+                "curve_end_date": curve.end_date_local,
+                "athlete_weight_kg": curve.weight,
             }
 
-            # If we have dates, show range
-            dates = [p.date for p in power_curve.data if p.date]
-            if dates:
-                summary["effort_date_range"] = {"oldest": min(dates), "newest": max(dates)}
-
-            # Calculate FTP and power zones (based on 20-min power)
-            twenty_min_point = min(
-                power_curve.data,
-                key=lambda p: abs(p.secs - 1200),
-                default=None,
-            )
-
-            ftp_analysis = None
-            if twenty_min_point and abs(twenty_min_point.secs - 1200) <= 120:
-                # Estimate FTP as 95% of 20-min power
-                estimated_ftp = int((twenty_min_point.watts or 0) * 0.95)
-
-                if estimated_ftp > 0:
-                    # Power zones
-                    zones = {
-                        "recovery": (0, 0.55),
-                        "endurance": (0.56, 0.75),
-                        "tempo": (0.76, 0.90),
-                        "threshold": (0.91, 1.05),
-                        "vo2max": (1.06, 1.20),
-                        "anaerobic": (1.21, 1.50),
+            ftp_analysis: dict[str, Any] | None = None
+            twenty_min = next((p for p in points if p["secs"] == 1200), None)
+            if twenty_min is None:
+                candidate = min(points, key=lambda p: abs(p["secs"] - 1200), default=None)
+                if candidate is not None and abs(candidate["secs"] - 1200) <= 120:
+                    twenty_min = candidate
+            if twenty_min is not None and twenty_min["value"] > 0:
+                estimated_ftp = int(twenty_min["value"] * 0.95)
+                zones = {
+                    "recovery": (0.0, 0.55),
+                    "endurance": (0.56, 0.75),
+                    "tempo": (0.76, 0.90),
+                    "threshold": (0.91, 1.05),
+                    "vo2max": (1.06, 1.20),
+                    "anaerobic": (1.21, 1.50),
+                }
+                power_zones: dict[str, dict[str, int]] = {}
+                for zone_name, (low, high) in zones.items():
+                    power_zones[zone_name] = {
+                        "min_watts": int(estimated_ftp * low),
+                        "max_watts": int(estimated_ftp * high),
+                        "min_percent_ftp": int(low * 100),
+                        "max_percent_ftp": int(high * 100),
                     }
-
-                    power_zones: dict[str, dict[str, int]] = {}
-                    for zone_name, (low, high) in zones.items():
-                        power_zones[zone_name] = {
-                            "min_watts": int(estimated_ftp * low),
-                            "max_watts": int(estimated_ftp * high),
-                            "min_percent_ftp": int(low * 100),
-                            "max_percent_ftp": int(high * 100),
-                        }
-
-                    ftp_analysis = {
-                        "twenty_min_power": twenty_min_point.watts,
-                        "estimated_ftp": estimated_ftp,
-                        "power_zones": power_zones,
-                    }
+                ftp_analysis = {
+                    "twenty_min_power": twenty_min["value"],
+                    "estimated_ftp": estimated_ftp,
+                    "method": "Coggan 95% of 20-min power",
+                    "power_zones": power_zones,
+                }
 
             result_data: dict[str, Any] = {
                 "period": period_label,
+                "sport_type": sport,
                 "peak_efforts": peak_efforts,
                 "summary": summary,
             }
-
             if ftp_analysis:
                 result_data["ftp_analysis"] = ftp_analysis
 
-            return ResponseBuilder.build_response(
-                data=result_data,
-                query_type="power_curves",
-            )
+            return ResponseBuilder.build_response(data=result_data, query_type="power_curves")
 
     except ICUAPIError as e:
         return ResponseBuilder.build_error_response(e.message, error_type="api_error")

@@ -13,15 +13,13 @@ from .models import (
     ActivitySummary,
     Athlete,
     BestEffort,
+    DataCurveSet,
     Event,
     Folder,
     Gear,
     GearReminder,
     Histogram,
-    HRCurve,
     Interval,
-    PaceCurve,
-    PowerCurve,
     SportSettings,
     Wellness,
     Workout,
@@ -563,95 +561,99 @@ class ICUClient:
         return Event(**response.json())
 
     # ==================== Performance Curve Endpoints ====================
+    #
+    # The Intervals.icu API requires:
+    #   - the `.json` extension on the path
+    #   - a required `type` query param (the sport)
+    #   - the `curves` query param for time window (e.g. "1y", "42d", "all",
+    #     "r.2024-01-01.2024-06-30"), NOT the old `oldest`/`newest` pair.
+    # Without these, the API returns HTTP 422.
 
     async def get_power_curves(
         self,
-        athlete_id: str | None = None,
-        oldest: str | None = None,
+        sport_type: str = "Ride",
+        curves: str | None = None,
         newest: str | None = None,
-        sport_type: str | None = None,
-    ) -> PowerCurve:
-        """Get power curve data (best efforts for various durations).
+        athlete_id: str | None = None,
+    ) -> DataCurveSet:
+        """Get power mean-max curves.
 
         Args:
-            athlete_id: Athlete ID (uses config default if not provided)
-            oldest: Oldest date to include (ISO-8601 format)
-            newest: Newest date to include (ISO-8601 format)
-            sport_type: Activity type (e.g., 'Ride', 'Run', 'Swim')
-
-        Returns:
-            PowerCurve with best efforts data
+            sport_type: REQUIRED by the API. Defaults to "Ride".
+            curves: Time window. e.g. "7d", "42d", "1y", "all", or
+                    "r.YYYY-MM-DD.YYYY-MM-DD" for a date range. API default is 1y.
+            newest: Newest date to include (ISO-8601). Optional.
+            athlete_id: Athlete ID (uses config default if not provided).
         """
         athlete_id = athlete_id or self.config.intervals_icu_athlete_id
-        params = {}
-
-        if oldest:
-            params["oldest"] = oldest
+        params: dict[str, Any] = {"type": sport_type}
+        if curves:
+            params["curves"] = curves
         if newest:
             params["newest"] = newest
-        if sport_type:
-            params["type"] = sport_type
 
-        response = await self._request("GET", f"/athlete/{athlete_id}/power-curves", params=params)
-        return PowerCurve(**response.json())
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/power-curves.json", params=params
+        )
+        return DataCurveSet(**response.json())
 
     async def get_hr_curves(
         self,
-        athlete_id: str | None = None,
-        oldest: str | None = None,
+        sport_type: str = "Ride",
+        curves: str | None = None,
         newest: str | None = None,
-    ) -> HRCurve:
-        """Get heart rate curve data (best efforts for various durations).
+        athlete_id: str | None = None,
+    ) -> DataCurveSet:
+        """Get heart-rate mean-max curves.
 
         Args:
-            athlete_id: Athlete ID (uses config default if not provided)
-            oldest: Oldest date to include (ISO-8601 format)
-            newest: Newest date to include (ISO-8601 format)
-
-        Returns:
-            HRCurve with best efforts data
+            sport_type: REQUIRED by the API. Defaults to "Ride".
+            curves: Time window. See get_power_curves for format.
+            newest: Newest date to include (ISO-8601). Optional.
+            athlete_id: Athlete ID (uses config default if not provided).
         """
         athlete_id = athlete_id or self.config.intervals_icu_athlete_id
-        params = {}
-
-        if oldest:
-            params["oldest"] = oldest
+        params: dict[str, Any] = {"type": sport_type}
+        if curves:
+            params["curves"] = curves
         if newest:
             params["newest"] = newest
 
-        response = await self._request("GET", f"/athlete/{athlete_id}/hr-curves", params=params)
-        return HRCurve(**response.json())
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/hr-curves.json", params=params
+        )
+        return DataCurveSet(**response.json())
 
     async def get_pace_curves(
         self,
-        athlete_id: str | None = None,
-        oldest: str | None = None,
+        sport_type: str = "Run",
+        curves: str | None = None,
         newest: str | None = None,
         use_gap: bool = False,
-    ) -> PaceCurve:
-        """Get pace curve data (best efforts for various durations).
+        athlete_id: str | None = None,
+    ) -> DataCurveSet:
+        """Get pace mean-max curves (typically for running).
 
         Args:
-            athlete_id: Athlete ID (uses config default if not provided)
-            oldest: Oldest date to include (ISO-8601 format)
-            newest: Newest date to include (ISO-8601 format)
-            use_gap: Use Grade Adjusted Pace for running (default False)
-
-        Returns:
-            PaceCurve with best efforts data
+            sport_type: REQUIRED by the API. Defaults to "Run".
+            curves: Time window. See get_power_curves for format.
+            newest: Newest date to include (ISO-8601). Optional.
+            use_gap: Use Grade-Adjusted Pace (default False).
+            athlete_id: Athlete ID (uses config default if not provided).
         """
         athlete_id = athlete_id or self.config.intervals_icu_athlete_id
-        params = {}
-
-        if oldest:
-            params["oldest"] = oldest
+        params: dict[str, Any] = {"type": sport_type}
+        if curves:
+            params["curves"] = curves
         if newest:
             params["newest"] = newest
         if use_gap:
             params["gap"] = "true"
 
-        response = await self._request("GET", f"/athlete/{athlete_id}/pace-curves", params=params)
-        return PaceCurve(**response.json())
+        response = await self._request(
+            "GET", f"/athlete/{athlete_id}/pace-curves.json", params=params
+        )
+        return DataCurveSet(**response.json())
 
     # ==================== Workout Library Endpoints ====================
 
