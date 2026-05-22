@@ -267,15 +267,22 @@ def _suggested_zone(duration_s: int) -> str:
 
 
 def _format_distance_dsl(length_m: float) -> str:
-    """Format a segment length as an Intervals.icu DSL distance literal.
+    """Format a segment length as an Intervals.icu DSL distance literal — always km.
 
-    >=1000 m: "X.Xkm" with 1 decimal (e.g. "1.6km").
-    <1000 m: "Xm" rounded to nearest 10 m (e.g. "430m") so the device can act on it.
-    Distance is preserved precisely enough that intervals line up with terrain.
+    The DSL overloads the suffix `m`: in a distance context it means metres, but
+    in a time context (where most workout steps live) it means minutes. Pasting
+    a `- 90m Z6` step into a workout description silently becomes "90 minutes at
+    Z6" instead of "90 metres at Z6", producing absurd durations and TSS. So we
+    always emit `km`:
+
+      >=1000 m: 1 decimal (e.g. "1.6km")
+      <1000 m: 2 decimals, trailing zeros trimmed (e.g. "0.43km", "0.5km", "0.09km")
     """
-    if length_m >= 1000:
-        return f"{length_m / 1000.0:.1f}km"
-    return f"{int(round(length_m / 10.0) * 10)}m"
+    km = length_m / 1000.0
+    if km >= 1.0:
+        return f"{km:.1f}km"
+    formatted = f"{km:.2f}".rstrip("0").rstrip(".")
+    return f"{formatted}km"
 
 
 def _bare_zone(suggested_zone: str) -> str:
