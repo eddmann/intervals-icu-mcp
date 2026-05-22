@@ -266,6 +266,47 @@ def _suggested_zone(duration_s: int) -> str:
     return "Z6 anaerobic"
 
 
+def _format_distance_dsl(length_m: float) -> str:
+    """Format a segment length as an Intervals.icu DSL distance literal.
+
+    >=1000 m: "X.Xkm" with 1 decimal (e.g. "1.6km").
+    <1000 m: "Xm" rounded to nearest 10 m (e.g. "430m") so the device can act on it.
+    Distance is preserved precisely enough that intervals line up with terrain.
+    """
+    if length_m >= 1000:
+        return f"{length_m / 1000.0:.1f}km"
+    return f"{int(round(length_m / 10.0) * 10)}m"
+
+
+def _bare_zone(suggested_zone: str) -> str:
+    """Extract the bare zone tag from a 'Z4 threshold' / 'Z6 anaerobic' label.
+
+    The Intervals.icu DSL accepts 'Z3', 'Z4', etc. — not the human-readable suffix.
+    """
+    return suggested_zone.split(" ", 1)[0]
+
+
+def _climb_suggested_step(climb_dict: dict[str, Any]) -> str:
+    """Build a distance-locked DSL line for a climb (ready to paste into create_event)."""
+    distance = _format_distance_dsl(float(climb_dict["length_m"]))
+    zone = _bare_zone(str(climb_dict["suggested_zone"]))
+    return f"- {distance} {zone}"
+
+
+def _recovery_suggested_step(segment: dict[str, Any]) -> str:
+    """Build a distance-locked DSL line for a recovery segment.
+
+    The recovery zone is chosen by character — descents and shallow descents are
+    pure Z1 spin-out; flats are Z2 endurance; shallow rises default to Z2 but
+    Claude can promote to Z3 if it needs to extend a hard effort there (the
+    hard_effort_recommended flag on the segment is the cue).
+    """
+    distance = _format_distance_dsl(float(segment["length_m"]))
+    char = str(segment["character"])
+    zone = "Z1" if char in ("descent", "shallow_descent") else "Z2"
+    return f"- {distance} {zone}"
+
+
 def _characterise_segment(avg_grad_pct: float, climb_threshold_pct: float) -> tuple[str, bool]:
     """Classify a non-climb segment by average gradient and flag whether hard
     intervals are appropriate to place (or extend) into it.
@@ -318,16 +359,16 @@ def _build_recovery_segments(
         ele_delta = points[end_idx].ele - points[start_idx].ele
         avg_grad = ele_delta / length_m * 100.0
         character, hard_ok = _characterise_segment(avg_grad, climb_threshold_pct)
-        segments.append(
-            {
-                "start_km": round(points[start_idx].cum_dist_m / 1000.0, 3),
-                "end_km": round(points[end_idx].cum_dist_m / 1000.0, 3),
-                "length_m": round(length_m, 1),
-                "avg_gradient_percent": round(avg_grad, 2),
-                "character": character,
-                "hard_effort_recommended": hard_ok,
-            }
-        )
+        seg: dict[str, Any] = {
+            "start_km": round(points[start_idx].cum_dist_m / 1000.0, 3),
+            "end_km": round(points[end_idx].cum_dist_m / 1000.0, 3),
+            "length_m": round(length_m, 1),
+            "avg_gradient_percent": round(avg_grad, 2),
+            "character": character,
+            "hard_effort_recommended": hard_ok,
+        }
+        seg["suggested_step"] = _recovery_suggested_step(seg)
+        segments.append(seg)
     return segments
 
 
@@ -381,6 +422,11 @@ def _warmup_recommendation(climbs_data: list[dict[str, Any]], sport: str) -> dic
 def _composition_tips() -> list[str]:
     """Hints for how Claude should turn the structured data into a workout description."""
     return [
+        "CRITICAL: Workout steps MUST be distance-based, never time-based. Every climb "
+        "and every recovery segment in this response carries a `suggested_step` field "
+        "with a ready-to-paste DSL line (e.g. '- 1.6km Z4'). Use these literally — "
+        "do not convert lengths to durations. Time-based steps drift relative to the "
+        "terrain and put hard efforts on descents or intersections.",
         "Prepend a 10s Z1 prep step before each hard interval — the Garmin shows this "
         "as a distinct step with a countdown, giving the rider a clear 'about to start' cue.",
         "Never place a hard interval on a segment with character 'descent' or "
@@ -388,9 +434,6 @@ def _composition_tips() -> list[str]:
         "If a desired hard interval is longer than the steep climb allows, extend it "
         "into an adjacent 'shallow_rise' segment (immediately before or after the climb). "
         "Never extend a hard interval into descending terrain.",
-        "Use distance-based steps in the Intervals.icu DSL (e.g. '- 1.6km 95%') so "
-        "intervals line up with the route when the rider starts the workout at the "
-        "route start.",
     ]
 
 
@@ -551,21 +594,21 @@ async def analyze_route_climbs(
             category = (
                 _categorise_climb_cycling(c) if sport == "cycling" else _categorise_climb_running(c)
             )
-            climbs_data.append(
-                {
-                    "climb_index": i,
-                    "start_km": round(c.start_km, 3),
-                    "end_km": round(c.end_km, 3),
-                    "length_m": round(c.length_m, 1),
-                    "elevation_gain_m": round(c.elevation_gain_m, 1),
-                    "avg_gradient_percent": round(c.avg_gradient_pct, 2),
-                    "max_gradient_percent": round(c.max_gradient_pct, 2),
-                    "category": category,
-                    "est_duration_s": duration_s,
-                    "eligible_for_hard_effort": c.avg_gradient_pct >= profile.min_gradient_pct,
-                    "suggested_zone": _suggested_zone(duration_s),
-                }
-            )
+            climb_dict: dict[str, Any] = {
+                "climb_index": i,
+                "start_km": round(c.start_km, 3),
+                "end_km": round(c.end_km, 3),
+                "length_m": round(c.length_m, 1),
+                "elevation_gain_m": round(c.elevation_gain_m, 1),
+                "avg_gradient_percent": round(c.avg_gradient_pct, 2),
+                "max_gradient_percent": round(c.max_gradient_pct, 2),
+                "category": category,
+                "est_duration_s": duration_s,
+                "eligible_for_hard_effort": c.avg_gradient_pct >= profile.min_gradient_pct,
+                "suggested_zone": _suggested_zone(duration_s),
+            }
+            climb_dict["suggested_step"] = _climb_suggested_step(climb_dict)
+            climbs_data.append(climb_dict)
 
         total_distance_m = points[-1].cum_dist_m
         elevation_gain = sum(
