@@ -354,6 +354,17 @@ class TestSuggestedStep:
         assert "distance" in first
         assert "suggested_step" in first
 
+    async def test_units_tip_clarifies_m_vs_min_ambiguity(self):
+        """If Claude has to write its own step (e.g. a warm-up), the tip must
+        steer it away from the m/min ambiguity that breaks the DSL parser."""
+        result = await analyze_route_climbs(gpx_path=str(FIXTURES / "multi_climb.gpx"))
+        r = _load(result)
+        joined = " ".join(r["analysis"]["composition_tips"]).lower()
+        # Must explicitly call out the metres-vs-minutes overload.
+        assert "metres" in joined or "metres" in joined
+        assert "min" in joined  # the recommended unambiguous time suffix
+        assert "10min" in joined
+
 
 class TestProfileShape:
     """The elevation profile should always be present and roughly downsampled."""

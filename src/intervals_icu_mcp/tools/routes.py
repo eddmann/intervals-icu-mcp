@@ -434,6 +434,9 @@ def _composition_tips() -> list[str]:
         "with a ready-to-paste DSL line (e.g. '- 1.6km Z4'). Use these literally — "
         "do not convert lengths to durations. Time-based steps drift relative to the "
         "terrain and put hard efforts on descents or intersections.",
+        "Units in workout DSL: Xkm/Xm = distance, Xmin/Xs = time. The token 'm' is "
+        "metres, never minutes. If you ever need a time-based step (e.g. a warm-up), "
+        "write '10min', never '10m'.",
         "Prepend a 10s Z1 prep step before each hard interval — the Garmin shows this "
         "as a distinct step with a countdown, giving the rider a clear 'about to start' cue.",
         "Never place a hard interval on a segment with character 'descent' or "
