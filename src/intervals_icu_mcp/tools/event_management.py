@@ -1,5 +1,6 @@
 """Event/calendar management tools for Intervals.icu MCP server."""
 
+import re
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -8,6 +9,71 @@ from fastmcp import Context
 from ..auth import ICUConfig
 from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
+
+
+def _detect_primary_metric(description: str | None) -> str:
+    """Identify which target metric dominates a workout description.
+
+    Returns one of: "power", "heart_rate", "pace", "zone_only" (when only Z1-Z6
+    appear with no explicit metric markers — the device uses the sport default),
+    or "unknown" (no description).
+
+    The detection is intentionally simple — it looks for unambiguous markers and
+    falls back to "zone_only". A workout with mixed metrics returns the highest-
+    count explicit category; that's not a bug, just an honest summary of what
+    the description contains.
+    """
+    if not description:
+        return "unknown"
+
+    hr_markers = re.findall(r"\bHR\b|\bbpm\b|%\s*HR\b", description, flags=re.IGNORECASE)
+    pace_markers = re.findall(r"/km\b|/mi\b|min/km", description, flags=re.IGNORECASE)
+    # Power: bare watts (e.g. "250w") or % NOT followed by " HR".
+    power_markers = re.findall(
+        r"\b\d+\s*w\b|\b\d+%(?!\s*HR)|FTP", description, flags=re.IGNORECASE
+    )
+
+    counts = {
+        "power": len(power_markers),
+        "heart_rate": len(hr_markers),
+        "pace": len(pace_markers),
+    }
+    if sum(counts.values()) == 0:
+        return "zone_only"
+    return max(counts, key=lambda k: counts[k])
+
+
+def _build_summary_line(
+    name: str,
+    event_type: str | None,
+    duration_seconds: int | None,
+    description: str | None,
+) -> str:
+    """Single-line human-readable echo of what was just created.
+
+    Purpose: surface the prescription type (power / HR / pace / zone) at the
+    moment of creation so the user notices a wrong metric at "push to calendar"
+    rather than at "lace up at km 0". Today's case: a run scheduled with power
+    targets for Z1-Z2 steps would have shown "POWER-based" here and got fixed
+    before the run started.
+    """
+    sport_label = event_type or "workout"
+    if duration_seconds and duration_seconds > 0:
+        minutes = duration_seconds // 60
+        duration_label = f"~{minutes} min"
+    else:
+        duration_label = "no duration set"
+
+    metric = _detect_primary_metric(description)
+    metric_label = {
+        "power": "POWER-based",
+        "heart_rate": "HR-based",
+        "pace": "PACE-based",
+        "zone_only": "zone-based (uses sport's default metric)",
+        "unknown": "no description provided",
+    }[metric]
+
+    return f"Created '{name}' — {sport_label}, {duration_label}, primarily {metric_label}."
 
 
 async def create_event(
@@ -103,10 +169,19 @@ async def create_event(
             if event.icu_training_load:
                 event_result["training_load"] = event.icu_training_load
 
+            summary_line = _build_summary_line(
+                name=name,
+                event_type=event_type,
+                duration_seconds=duration_seconds,
+                description=description,
+            )
             return ResponseBuilder.build_response(
                 data=event_result,
                 query_type="create_event",
-                metadata={"message": f"Successfully created {category.lower()}: {name}"},
+                metadata={
+                    "message": f"Successfully created {category.lower()}: {name}",
+                    "summary_line": summary_line,
+                },
             )
 
     except ICUAPIError as e:

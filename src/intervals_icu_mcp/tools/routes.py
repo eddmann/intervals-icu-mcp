@@ -400,6 +400,53 @@ def _downsample_profile(points: list[_Point], target: int = 80) -> list[dict[str
     return out
 
 
+def _metric_recommendation(sport: str) -> dict[str, Any]:
+    """Sport-specific guidance on which target metric the workout steps should use.
+
+    Cycling defaults to power across the board. Running flips that: easy/endurance
+    running power is too noisy to be a reliable prescription (it varies with cadence,
+    terrain, fatigue), so HR is the better default for Z1–Z2. Pace works well for
+    sustained efforts on consistent terrain; power can still play a role at very
+    short / high intensities. Reserving this as a hint, not a hard rule — Claude
+    overrides freely if the rider explicitly asks for a different metric.
+    """
+    if sport == "running":
+        return {
+            "primary_metric": "heart_rate",
+            "by_zone": {
+                "Z1-Z2 (easy / endurance)": (
+                    "Use HR targets. Easy-pace running power varies too much with "
+                    "cadence, terrain, and fatigue to be a useful low-intensity target."
+                ),
+                "Z3 (tempo)": (
+                    "Pace if terrain is flat-ish, HR if hilly or hot."
+                ),
+                "Z4-Z5 (threshold / VO2)": (
+                    "Pace or HR. Power optional and useful for short hard reps where HR can't keep up."
+                ),
+                "Z6+ (anaerobic / sprint)": (
+                    "Power if you have rFTP set up; otherwise treat as effort-by-feel."
+                ),
+            },
+            "note": (
+                "For running, default to HR for the warm-up and easy/endurance work. "
+                "Cycling is the opposite — power is preferred across all zones."
+            ),
+        }
+    return {
+        "primary_metric": "power",
+        "by_zone": {
+            "all zones": (
+                "Power targets across all zones (e.g. '- 1.6km 95%' or '- 5min Z4'). "
+                "HR is a useful secondary signal but not the primary prescription."
+            ),
+        },
+        "note": (
+            "For cycling, power is the most reliable prescription across all zones."
+        ),
+    }
+
+
 def _warmup_recommendation(climbs_data: list[dict[str, Any]], sport: str) -> dict[str, Any]:
     """Return guidance Claude can use to ensure the workout has a real warm-up.
 
@@ -453,6 +500,7 @@ def _build_analysis(
     sport: str,
 ) -> dict[str, Any]:
     warmup = _warmup_recommendation(climbs_data, sport)
+    metric = _metric_recommendation(sport)
 
     if not climbs_data:
         return {
@@ -464,6 +512,7 @@ def _build_analysis(
             "eligible_climb_count": 0,
             "total_climbing_time_s": 0,
             "warmup_recommendation": warmup,
+            "metric_recommendation": metric,
             "composition_tips": _composition_tips(),
         }
 
@@ -489,6 +538,7 @@ def _build_analysis(
         "total_climbing_time_s": total_time,
         "suggested_zone_breakdown": zone_breakdown,
         "warmup_recommendation": warmup,
+        "metric_recommendation": metric,
         "composition_tips": _composition_tips(),
     }
 

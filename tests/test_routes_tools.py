@@ -266,6 +266,46 @@ class TestWarmupRecommendation:
         assert r["analysis"]["warmup_recommendation"]["min_duration_minutes"] == 10
 
 
+class TestMetricRecommendation:
+    """Sport-specific metric guidance must flow into the analysis output so
+    Claude doesn't compose a power-based easy-run workout (today's foot-gun)."""
+
+    async def test_running_recommends_heart_rate_as_primary(self):
+        result = await analyze_route_climbs(
+            gpx_path=str(FIXTURES / "running_route.gpx"),
+            sport="running",
+        )
+        r = _load(result)
+        metric = r["analysis"]["metric_recommendation"]
+        assert metric["primary_metric"] == "heart_rate"
+        # Running guidance must explicitly call out HR for easy/endurance zones.
+        note = metric["note"].lower()
+        assert "hr" in note or "heart" in note
+        # Z1-Z2 guidance should mention HR (not power).
+        z12_keys = [k for k in metric["by_zone"] if "Z1" in k or "Z2" in k or "easy" in k]
+        assert z12_keys
+        z12_text = " ".join(metric["by_zone"][k] for k in z12_keys).lower()
+        assert "hr" in z12_text or "heart" in z12_text
+
+    async def test_cycling_recommends_power_as_primary(self):
+        result = await analyze_route_climbs(
+            gpx_path=str(FIXTURES / "single_climb.gpx"),
+            sport="cycling",
+        )
+        r = _load(result)
+        metric = r["analysis"]["metric_recommendation"]
+        assert metric["primary_metric"] == "power"
+
+    async def test_metric_recommendation_present_with_no_climbs(self):
+        """Guidance must appear even when the route has no climbs."""
+        result = await analyze_route_climbs(
+            gpx_path=str(FIXTURES / "flat_route.gpx"),
+            sport="running",
+        )
+        r = _load(result)
+        assert r["analysis"]["metric_recommendation"]["primary_metric"] == "heart_rate"
+
+
 class TestCompositionTips:
     """Analysis must include workout-composition tips Claude can follow."""
 
