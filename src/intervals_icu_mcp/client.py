@@ -1,6 +1,6 @@
 """Async HTTP client for Intervals.icu API."""
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic import TypeAdapter
@@ -712,7 +712,24 @@ class ICUClient:
             params["types"] = ",".join(streams)
 
         response = await self._request("GET", f"/activity/{activity_id}/streams", params=params)
-        return ActivityStreams(**response.json())
+        raw: Any = response.json()
+        # The API returns a list of stream objects, each with a `type` (e.g. "watts",
+        # "heartrate") and a `data` array. ActivityStreams expects a flat dict like
+        # {"watts": [...], "heartrate": [...]} — unflatten here so the model loads
+        # correctly. Unknown stream types (e.g. "torque", "left_right_balance") are
+        # passed through; Pydantic v2's default extra="ignore" drops them.
+        flat: dict[str, Any] = {}
+        if isinstance(raw, list):
+            for item in cast(list[Any], raw):
+                if not isinstance(item, dict):
+                    continue
+                item_dict = cast(dict[str, Any], item)
+                stream_type = item_dict.get("type")
+                if isinstance(stream_type, str):
+                    flat[stream_type] = item_dict.get("data")
+        elif isinstance(raw, dict):
+            flat = cast(dict[str, Any], raw)
+        return ActivityStreams(**flat)
 
     async def get_best_efforts(
         self,
