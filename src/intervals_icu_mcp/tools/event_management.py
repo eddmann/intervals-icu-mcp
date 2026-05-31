@@ -1,5 +1,6 @@
 """Event/calendar management tools for Intervals.icu MCP server."""
 
+import re
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -10,11 +11,76 @@ from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
 
 
+def _detect_primary_metric(description: str | None) -> str:
+    """Identify which target metric dominates a workout description.
+
+    Returns one of: "power", "heart_rate", "pace", "zone_only" (when only Z1-Z6
+    appear with no explicit metric markers — the device uses the sport default),
+    or "unknown" (no description).
+
+    The detection is intentionally simple — it looks for unambiguous markers and
+    falls back to "zone_only". A workout with mixed metrics returns the highest-
+    count explicit category; that's not a bug, just an honest summary of what
+    the description contains.
+    """
+    if not description:
+        return "unknown"
+
+    hr_markers = re.findall(r"\bHR\b|\bbpm\b|%\s*HR\b", description, flags=re.IGNORECASE)
+    pace_markers = re.findall(r"/km\b|/mi\b|min/km", description, flags=re.IGNORECASE)
+    # Power: bare watts (e.g. "250w") or % NOT followed by " HR".
+    power_markers = re.findall(
+        r"\b\d+\s*w\b|\b\d+%(?!\s*HR)|FTP", description, flags=re.IGNORECASE
+    )
+
+    counts = {
+        "power": len(power_markers),
+        "heart_rate": len(hr_markers),
+        "pace": len(pace_markers),
+    }
+    if sum(counts.values()) == 0:
+        return "zone_only"
+    return max(counts, key=lambda k: counts[k])
+
+
+def _build_summary_line(
+    name: str,
+    event_type: str | None,
+    duration_seconds: int | None,
+    description: str | None,
+) -> str:
+    """Single-line human-readable echo of what was just created.
+
+    Purpose: surface the prescription type (power / HR / pace / zone) at the
+    moment of creation so the user notices a wrong metric at "push to calendar"
+    rather than at "lace up at km 0". Today's case: a run scheduled with power
+    targets for Z1-Z2 steps would have shown "POWER-based" here and got fixed
+    before the run started.
+    """
+    sport_label = event_type or "workout"
+    if duration_seconds and duration_seconds > 0:
+        minutes = duration_seconds // 60
+        duration_label = f"~{minutes} min"
+    else:
+        duration_label = "no duration set"
+
+    metric = _detect_primary_metric(description)
+    metric_label = {
+        "power": "POWER-based",
+        "heart_rate": "HR-based",
+        "pace": "PACE-based",
+        "zone_only": "zone-based (uses sport's default metric)",
+        "unknown": "no description provided",
+    }[metric]
+
+    return f"Created '{name}' — {sport_label}, {duration_label}, primarily {metric_label}."
+
+
 async def create_event(
     start_date: Annotated[str, "Start date in YYYY-MM-DD format"],
     name: Annotated[str, "Event name"],
     category: Annotated[str, "Event category: WORKOUT, NOTE, RACE, or GOAL"],
-    description: Annotated[str | None, "Event description (optional)"] = None,
+    description: Annotated[str | None, "Event description. For WORKOUT events, use intervals.icu workout text syntax to create structured workouts with colored zone blocks. Format: section headers (Warmup/Main Set/Cooldown) on own lines, steps start with '- '. Power: N% (of FTP), Nw (watts), ZN (zone). HR: N% HR, ZN HR. Duration: Nm, Ns, Nh. Repeats: 'Main Set 3x'. Ramps: 'ramp 50-75%'. Cadence: Nrpm. Example: 'Warmup\\n- 10m 55%\\n\\nMain Set 3x\\n- 5m 95-105%\\n- 3m 50%\\n\\nCooldown\\n- 10m 45%'"] = None,
     event_type: Annotated[str | None, "Activity type (e.g., Ride, Run, Swim)"] = None,
     duration_seconds: Annotated[int | None, "Planned duration in seconds"] = None,
     distance_meters: Annotated[float | None, "Planned distance in meters"] = None,
@@ -26,11 +92,15 @@ async def create_event(
     Adds an event to your Intervals.icu calendar. Events can be workouts with
     planned metrics, notes for tracking information, races, or training goals.
 
+    For structured workouts with colored zone blocks, put workout steps in the
+    description field using intervals.icu text syntax. The server will parse it
+    and generate the visual workout structure automatically.
+
     Args:
         start_date: Date in ISO-8601 format (YYYY-MM-DD)
         name: Name of the event
         category: Type of event - WORKOUT, NOTE, RACE, or GOAL
-        description: Optional detailed description
+        description: For workouts, use intervals.icu text syntax for structured steps
         event_type: Activity type (e.g., "Ride", "Run", "Swim") for workouts
         duration_seconds: Planned duration for workouts
         distance_meters: Planned distance for workouts
@@ -62,7 +132,7 @@ async def create_event(
     try:
         # Build event data
         event_data: dict[str, Any] = {
-            "start_date_local": start_date,
+            "start_date_local": f"{start_date}T00:00:00",
             "name": name,
             "category": category.upper(),
         }
@@ -99,10 +169,19 @@ async def create_event(
             if event.icu_training_load:
                 event_result["training_load"] = event.icu_training_load
 
+            summary_line = _build_summary_line(
+                name=name,
+                event_type=event_type,
+                duration_seconds=duration_seconds,
+                description=description,
+            )
             return ResponseBuilder.build_response(
                 data=event_result,
                 query_type="create_event",
-                metadata={"message": f"Successfully created {category.lower()}: {name}"},
+                metadata={
+                    "message": f"Successfully created {category.lower()}: {name}",
+                    "summary_line": summary_line,
+                },
             )
 
     except ICUAPIError as e:
@@ -164,7 +243,7 @@ async def update_event(
         if description is not None:
             event_data["description"] = description
         if start_date is not None:
-            event_data["start_date_local"] = start_date
+            event_data["start_date_local"] = f"{start_date}T00:00:00"
         if event_type is not None:
             event_data["type"] = event_type
         if duration_seconds is not None:
@@ -322,9 +401,10 @@ async def bulk_create_events(
             # Normalize category to uppercase
             event_data["category"] = event_data["category"].upper()
 
-            # Validate date format
+            # Validate date format and convert to full datetime
             try:
                 datetime.strptime(event_data["start_date_local"], "%Y-%m-%d")
+                event_data["start_date_local"] = f"{event_data['start_date_local']}T00:00:00"
             except ValueError:
                 return ResponseBuilder.build_error_response(
                     f"Event {i}: Invalid date format. Please use YYYY-MM-DD format.",
@@ -463,7 +543,7 @@ async def duplicate_event(
 
     try:
         async with ICUClient(config) as client:
-            duplicated_event = await client.duplicate_event(event_id, new_date)
+            duplicated_event = await client.duplicate_event(event_id, f"{new_date}T00:00:00")
 
             event_result: dict[str, Any] = {
                 "id": duplicated_event.id,

@@ -8,8 +8,30 @@ from fastmcp import FastMCP
 # Load environment variables
 load_dotenv()
 
+INSTRUCTIONS = """\
+Intervals.icu MCP — training analysis, calendar/workout planning, and the athlete's intervals.icu data.
+
+Routing when a Garmin Connect MCP is also connected (server name "Garmin Connect"):
+
+Prefer the Garmin server for raw, device-sourced data:
+- Sleep stages, sleep score, HRV, resting HR, stress, Body Battery
+- Per-activity sensor streams and device-derived metrics (training effect, training readiness, performance metrics, recovery time)
+- Daily health summary: steps, calories, intensity minutes, SpO2
+- Weight history (connected scale), women's health tracking
+
+Use this server (Intervals.icu) for everything Garmin does not compute and for planning/analysis on top of activity history:
+- Training load: CTL (fitness), ATL (fatigue), TSB (form), ramp rate, fitness summary
+- Workout planning and calendar: events, scheduled workouts, races, workout library
+- Multi-period performance curves: power, HR, pace over weeks/months/years
+- Custom interval/lap analysis, search across workouts, best efforts
+- Sport settings (FTP, FTHR, pace thresholds) and training zones
+- Manually entered wellness records; gear and reminders
+
+If the Garmin server is not connected, use this server for the biometric data above as well — wellness records here include data synced from Garmin.
+"""
+
 # Initialize FastMCP server
-mcp = FastMCP("Intervals.icu")
+mcp = FastMCP("Intervals.icu", instructions=INSTRUCTIONS)
 
 # Register middleware
 from .middleware import ConfigMiddleware
@@ -59,6 +81,7 @@ from .tools.gear import (
     update_gear_reminder,
 )
 from .tools.performance import get_power_curves
+from .tools.routes import analyze_route_climbs
 from .tools.sport_settings import (
     apply_sport_settings,
     create_sport_settings,
@@ -119,6 +142,9 @@ mcp.tool()(get_pace_curves)
 # Register workout library tools
 mcp.tool()(get_workout_library)
 mcp.tool()(get_workouts_in_folder)
+
+# Register route analysis tools
+mcp.tool()(analyze_route_climbs)
 
 # Register gear management tools
 mcp.tool()(get_gear_list)
@@ -330,10 +356,19 @@ Provide a structured weekly plan with:
 Then offer to create the events in my calendar if I approve the plan."""
 
 
+_VALID_TRANSPORTS = ("stdio", "http", "sse", "streamable-http")
+
+
 def main():
     """Main entry point for the Intervals.icu MCP server."""
-    # Run the server with stdio transport (default)
-    mcp.run()
+    import os
+
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport not in _VALID_TRANSPORTS:
+        raise ValueError(
+            f"MCP_TRANSPORT must be one of {_VALID_TRANSPORTS}, got {transport!r}"
+        )
+    mcp.run(transport=transport)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

@@ -1,0 +1,24 @@
+services:
+  intervals-icu-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: intervals-icu-mcp
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env
+    environment:
+      # Use streamable-http transport for remote access
+      - MCP_TRANSPORT=streamable-http
+      # FastMCP reads these via pydantic-settings (FASTMCP_ prefix)
+      - FASTMCP_HOST=0.0.0.0
+      - FASTMCP_PORT=8765
+      - FASTMCP_LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

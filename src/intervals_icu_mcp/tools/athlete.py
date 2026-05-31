@@ -1,5 +1,6 @@
 """Athlete profile and fitness tools for Intervals.icu MCP server."""
 
+from datetime import date, timedelta
 from typing import Any
 
 from fastmcp import Context
@@ -7,6 +8,45 @@ from fastmcp import Context
 from ..auth import ICUConfig
 from ..client import ICUAPIError, ICUClient
 from ..response_builder import ResponseBuilder
+
+
+async def _latest_fitness_from_wellness(client: ICUClient) -> dict[str, Any] | None:
+    """Fetch the latest CTL/ATL/TSB/ramp_rate from wellness records.
+
+    The /athlete endpoint frequently returns null for these fields; the
+    authoritative values live on the date-keyed wellness rows. Returns None
+    if no wellness row in the last 14 days has CTL and ATL populated.
+    """
+    today = date.today()
+    rows = await client.get_wellness(
+        oldest=(today - timedelta(days=14)).isoformat(),
+        newest=today.isoformat(),
+    )
+    rows = [r for r in rows if r.ctl is not None and r.atl is not None]
+    if not rows:
+        return None
+
+    rows.sort(key=lambda r: r.id)
+    latest = rows[-1]
+    assert latest.ctl is not None and latest.atl is not None
+
+    result: dict[str, Any] = {
+        "ctl": latest.ctl,
+        "atl": latest.atl,
+        "tsb": latest.tsb if latest.tsb is not None else latest.ctl - latest.atl,
+        "as_of": latest.id,
+    }
+
+    if latest.ramp_rate is not None:
+        result["ramp_rate"] = latest.ramp_rate
+    else:
+        # Ramp rate = 7-day CTL delta. Fall back to oldest available row.
+        target = (date.fromisoformat(latest.id) - timedelta(days=7)).isoformat()
+        prior = next((r for r in rows if r.id == target), rows[0])
+        if prior.ctl is not None:
+            result["ramp_rate"] = latest.ctl - prior.ctl
+
+    return result
 
 
 async def get_athlete_profile(
@@ -41,17 +81,29 @@ async def get_athlete_profile(
                 profile["dob"] = athlete.dob
             if athlete.weight:
                 profile["weight_kg"] = athlete.weight
+            if athlete.city:
+                profile["city"] = athlete.city
+            if athlete.country:
+                profile["country"] = athlete.country
+            if athlete.icu_resting_hr:
+                profile["resting_hr"] = athlete.icu_resting_hr
 
-            # Fitness metrics
+            # Fitness metrics — sourced from wellness (athlete object's
+            # ctl/atl/tsb/ramp_rate are frequently null on the API).
             fitness: dict[str, Any] = {}
-            if athlete.ctl is not None:
-                fitness["ctl"] = round(athlete.ctl, 1)
-            if athlete.atl is not None:
-                fitness["atl"] = round(athlete.atl, 1)
-            if athlete.tsb is not None:
-                fitness["tsb"] = round(athlete.tsb, 1)
-            if athlete.ramp_rate is not None:
-                fitness["ramp_rate"] = round(athlete.ramp_rate, 1)
+            wellness_fitness = await _latest_fitness_from_wellness(client)
+            if wellness_fitness is not None:
+                fitness["ctl"] = round(wellness_fitness["ctl"], 1)
+                fitness["atl"] = round(wellness_fitness["atl"], 1)
+                fitness["tsb"] = round(wellness_fitness["tsb"], 1)
+                if "ramp_rate" in wellness_fitness:
+                    fitness["ramp_rate"] = round(wellness_fitness["ramp_rate"], 1)
+                fitness["as_of"] = wellness_fitness["as_of"]
+            # Expose values for downstream analysis
+            tsb_value = wellness_fitness["tsb"] if wellness_fitness else None
+            ramp_rate_value = (
+                wellness_fitness.get("ramp_rate") if wellness_fitness else None
+            )
 
             # Sport settings
             sports: list[dict[str, Any]] = []
@@ -82,38 +134,38 @@ async def get_athlete_profile(
 
             # Analysis
             analysis: dict[str, Any] = {}
-            if athlete.tsb is not None:
-                if athlete.tsb > 20:
+            if tsb_value is not None:
+                if tsb_value > 20:
                     analysis["form_status"] = "very_fresh"
                     analysis["form_description"] = "Very fresh - good for racing"
-                elif athlete.tsb > 5:
+                elif tsb_value > 5:
                     analysis["form_status"] = "recovered"
                     analysis["form_description"] = "Recovered and ready for hard training"
-                elif athlete.tsb > -10:
+                elif tsb_value > -10:
                     analysis["form_status"] = "optimal"
                     analysis["form_description"] = "Optimal zone - productive training possible"
-                elif athlete.tsb > -30:
+                elif tsb_value > -30:
                     analysis["form_status"] = "fatigued"
                     analysis["form_description"] = "Accumulating fatigue - recovery may be needed"
                 else:
                     analysis["form_status"] = "very_fatigued"
                     analysis["form_description"] = "High fatigue - prioritize recovery"
 
-            if athlete.ramp_rate is not None:
-                if athlete.ramp_rate > 8:
+            if ramp_rate_value is not None:
+                if ramp_rate_value > 8:
                     analysis["ramp_rate_status"] = "high_risk"
                     analysis["ramp_rate_warning"] = (
                         "Fitness increasing too fast - reduce training load"
                     )
-                elif athlete.ramp_rate > 5:
+                elif ramp_rate_value > 5:
                     analysis["ramp_rate_status"] = "caution"
                     analysis["ramp_rate_warning"] = (
                         "Fitness increasing rapidly - monitor fatigue closely"
                     )
-                elif athlete.ramp_rate > 0:
+                elif ramp_rate_value > 0:
                     analysis["ramp_rate_status"] = "good"
                     analysis["ramp_rate_description"] = "Sustainable fitness gain"
-                elif athlete.ramp_rate > -5:
+                elif ramp_rate_value > -5:
                     analysis["ramp_rate_status"] = "declining"
                     analysis["ramp_rate_description"] = (
                         "Fitness slightly declining (taper/recovery)"
@@ -163,36 +215,40 @@ async def get_fitness_summary(
     try:
         async with ICUClient(config) as client:
             athlete = await client.get_athlete()
+            wellness_fitness = await _latest_fitness_from_wellness(client)
 
-            if athlete.ctl is None and athlete.atl is None:
+            if wellness_fitness is None:
                 return ResponseBuilder.build_error_response(
                     "No fitness data available. Complete some activities to build your fitness history.",
                     error_type="no_data",
                 )
 
+            ctl = wellness_fitness["ctl"]
+            atl = wellness_fitness["atl"]
+            tsb = wellness_fitness["tsb"]
+            ramp = wellness_fitness.get("ramp_rate")
+
             # Core metrics
-            fitness: dict[str, Any] = {}
-            if athlete.ctl is not None:
-                fitness["ctl"] = {
-                    "value": round(athlete.ctl, 1),
+            fitness: dict[str, Any] = {
+                "ctl": {
+                    "value": round(ctl, 1),
                     "description": "Chronic Training Load (Fitness)",
                     "explanation": "Long-term training load (42-day weighted average)",
-                }
-            if athlete.atl is not None:
-                fitness["atl"] = {
-                    "value": round(athlete.atl, 1),
+                },
+                "atl": {
+                    "value": round(atl, 1),
                     "description": "Acute Training Load (Fatigue)",
                     "explanation": "Short-term training load (7-day weighted average)",
-                }
-            if athlete.tsb is not None:
-                fitness["tsb"] = {
-                    "value": round(athlete.tsb, 1),
+                },
+                "tsb": {
+                    "value": round(tsb, 1),
                     "description": "Training Stress Balance (Form)",
                     "explanation": "Fitness - Fatigue",
-                }
-            if athlete.ramp_rate is not None:
+                },
+            }
+            if ramp is not None:
                 fitness["ramp_rate"] = {
-                    "value": round(athlete.ramp_rate, 1),
+                    "value": round(ramp, 1),
                     "description": "Rate of fitness change (CTL increase per week)",
                 }
 
@@ -200,39 +256,38 @@ async def get_fitness_summary(
             analysis: dict[str, Any] = {}
 
             # TSB interpretation
-            if athlete.tsb is not None:
-                if athlete.tsb > 20:
-                    analysis["form_status"] = "very_fresh"
-                    analysis["form_interpretation"] = "You're very fresh - good for racing!"
-                elif athlete.tsb > 5:
-                    analysis["form_status"] = "recovered"
-                    analysis["form_interpretation"] = "You're recovered and ready for hard training"
-                elif athlete.tsb > -10:
-                    analysis["form_status"] = "optimal"
-                    analysis["form_interpretation"] = "Optimal zone - productive training possible"
-                elif athlete.tsb > -30:
-                    analysis["form_status"] = "fatigued"
-                    analysis["form_interpretation"] = (
-                        "You're accumulating fatigue - recovery may be needed"
-                    )
-                else:
-                    analysis["form_status"] = "very_fatigued"
-                    analysis["form_interpretation"] = "High fatigue - prioritize recovery"
+            if tsb > 20:
+                analysis["form_status"] = "very_fresh"
+                analysis["form_interpretation"] = "You're very fresh - good for racing!"
+            elif tsb > 5:
+                analysis["form_status"] = "recovered"
+                analysis["form_interpretation"] = "You're recovered and ready for hard training"
+            elif tsb > -10:
+                analysis["form_status"] = "optimal"
+                analysis["form_interpretation"] = "Optimal zone - productive training possible"
+            elif tsb > -30:
+                analysis["form_status"] = "fatigued"
+                analysis["form_interpretation"] = (
+                    "You're accumulating fatigue - recovery may be needed"
+                )
+            else:
+                analysis["form_status"] = "very_fatigued"
+                analysis["form_interpretation"] = "High fatigue - prioritize recovery"
 
             # Ramp rate interpretation
-            if athlete.ramp_rate is not None:
-                if athlete.ramp_rate > 8:
+            if ramp is not None:
+                if ramp > 8:
                     analysis["ramp_rate_status"] = "high_risk"
                     analysis["ramp_rate_interpretation"] = "Fitness increasing too fast"
                     analysis["ramp_rate_warning"] = "Reduce training load to avoid overtraining"
-                elif athlete.ramp_rate > 5:
+                elif ramp > 5:
                     analysis["ramp_rate_status"] = "caution"
                     analysis["ramp_rate_interpretation"] = "Fitness increasing rapidly"
                     analysis["ramp_rate_warning"] = "Monitor fatigue and recovery closely"
-                elif athlete.ramp_rate > 0:
+                elif ramp > 0:
                     analysis["ramp_rate_status"] = "good"
                     analysis["ramp_rate_interpretation"] = "Sustainable fitness gain"
-                elif athlete.ramp_rate > -5:
+                elif ramp > -5:
                     analysis["ramp_rate_status"] = "declining"
                     analysis["ramp_rate_interpretation"] = (
                         "Fitness slightly declining (taper/recovery)"
@@ -243,15 +298,15 @@ async def get_fitness_summary(
 
             # Training recommendations
             recommendations: list[str] = []
-            if athlete.tsb is not None and athlete.ramp_rate is not None:
-                if athlete.tsb < -30:
+            if ramp is not None:
+                if tsb < -30:
                     recommendations.append("Take an easy week or rest days")
                     recommendations.append("Focus on recovery and low-intensity activities")
-                elif athlete.tsb < -10 and athlete.ramp_rate > 5:
+                elif tsb < -10 and ramp > 5:
                     recommendations.append("Balance hard training with recovery")
                     recommendations.append("Consider a recovery week soon")
-                elif athlete.tsb > 5:
-                    if athlete.ramp_rate < 0:
+                elif tsb > 5:
+                    if ramp < 0:
                         recommendations.append("Good time to increase training load")
                         recommendations.append("Consider adding volume or intensity")
                     else:
@@ -267,6 +322,7 @@ async def get_fitness_summary(
             data = {
                 "athlete_name": athlete.name,
                 "fitness_metrics": fitness,
+                "as_of": wellness_fitness["as_of"],
             }
 
             return ResponseBuilder.build_response(

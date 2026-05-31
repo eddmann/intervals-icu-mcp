@@ -67,7 +67,7 @@ async def get_calendar_events(
                     events_by_date[date] = []
 
                 # Determine relative timing
-                date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+                date_obj = datetime.fromisoformat(date).date()
                 today = datetime.now().date()
 
                 if date_obj == today:
@@ -189,7 +189,7 @@ async def get_upcoming_workouts(
 
             workouts_data: list[dict[str, Any]] = []
             for workout in workouts:
-                date_obj = datetime.strptime(workout.start_date_local, "%Y-%m-%d").date()
+                date_obj = datetime.fromisoformat(workout.start_date_local).date()
                 today = datetime.now().date()
 
                 if date_obj == today:
@@ -310,6 +310,8 @@ async def get_event(
                 fitness["ctl"] = round(event.icu_ctl, 1)
             if event.icu_atl is not None:
                 fitness["atl"] = round(event.icu_atl, 1)
+            if event.icu_ctl is not None and event.icu_atl is not None:
+                fitness["tsb"] = round(event.icu_ctl - event.icu_atl, 1)
             if fitness:
                 event_data["fitness_context"] = fitness
 
