@@ -356,12 +356,19 @@ Provide a structured weekly plan with:
 Then offer to create the events in my calendar if I approve the plan."""
 
 
+_VALID_TRANSPORTS = ("stdio", "http", "sse", "streamable-http")
+
+
 def main():
     """Main entry point for the Intervals.icu MCP server."""
     import os
 
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
-    mcp.run(transport=transport)
+    if transport not in _VALID_TRANSPORTS:
+        raise ValueError(
+            f"MCP_TRANSPORT must be one of {_VALID_TRANSPORTS}, got {transport!r}"
+        )
+    mcp.run(transport=transport)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":
