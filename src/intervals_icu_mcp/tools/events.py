@@ -310,6 +310,8 @@ async def get_event(
                 fitness["ctl"] = round(event.icu_ctl, 1)
             if event.icu_atl is not None:
                 fitness["atl"] = round(event.icu_atl, 1)
+            if event.icu_ctl is not None and event.icu_atl is not None:
+                fitness["tsb"] = round(event.icu_ctl - event.icu_atl, 1)
             if fitness:
                 event_data["fitness_context"] = fitness
 
